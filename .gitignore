@@ -1,0 +1,19 @@
+# Terraform state — may contain secrets
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Terraform working directory
+.terraform/
+.terraform.lock.hcl
+
+# Variable files that contain secrets (API keys, passwords, etc.)
+terraform.tfvars
+
+# Claude Code session data
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

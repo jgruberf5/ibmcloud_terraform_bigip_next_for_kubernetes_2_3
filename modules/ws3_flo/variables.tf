@@ -1,0 +1,155 @@
+# ============================================================
+# Root Terraform Variables
+# F5 BNK Orchestrator for existing ROKS cluster
+# ============================================================
+
+
+# ============================================================
+# IBM Cloud Variables
+# ============================================================
+
+variable "ibmcloud_api_key" {
+  description = "IBM Cloud API Key"
+  type        = string
+  sensitive   = true
+}
+
+variable "ibmcloud_cluster_region" {
+  description = "IBM Cloud region where the cluster resides"
+  type        = string
+  default     = "ca-tor"
+}
+
+variable "ibmcloud_resource_group" {
+  description = "IBM Cloud Resource Group name (leave empty to use account default)"
+  type        = string
+  default     = "default"
+}
+
+# ============================================================
+# Cluster Inputs
+# ============================================================
+
+variable "roks_cluster_name_or_id" {
+  description = "Name or ID of the existing OpenShift ROKS cluster to deploy BNK onto"
+  type        = string
+
+  validation {
+    condition     = length(var.roks_cluster_name_or_id) > 0
+    error_message = "roks_cluster_name_or_id cannot be empty — an existing cluster is required."
+  }
+}
+
+# ============================================================
+# FAR / Registry Configuration
+# ============================================================
+
+variable "far_repo_url" {
+  description = "FAR Repository URL for Docker and Helm registry"
+  type        = string
+  default     = "repo.f5.com"
+}
+
+variable "f5_bigip_k8s_manifest_version" {
+  description = "Version of the f5-bigip-k8s-manifest chart (FLO/CIS versions are extracted from this)"
+  type        = string
+  default     = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+}
+
+# ============================================================
+# COS Bucket Configuration
+# Optional — fetch FAR auth key and JWT from IBM Cloud Object Storage
+# ============================================================
+
+variable "use_cos_bucket" {
+  description = "Fetch FAR auth key and JWT from IBM Cloud Object Storage instead of local variables"
+  type        = bool
+  default     = true
+}
+
+variable "ibmcloud_cos_bucket_region" {
+  description = "IBM Cloud region where the COS bucket is located"
+  type        = string
+  default     = "us-south"
+}
+
+variable "ibmcloud_cos_instance_name" {
+  description = "IBM Cloud COS instance name"
+  type        = string
+  default     = "bnk-orchestration"
+}
+
+variable "ibmcloud_resources_cos_bucket" {
+  description = "IBM Cloud COS bucket containing the FAR auth key and JWT files"
+  type        = string
+  default     = "bnk-schematics-resources"
+}
+
+variable "f5_cne_far_auth_file" {
+  description = "FAR auth key filename in the COS bucket (.tgz)"
+  type        = string
+  default     = "f5-far-auth-key.tgz"
+}
+
+variable "f5_cne_subscription_jwt_file" {
+  description = "Subscription JWT filename in the COS bucket"
+  type        = string
+  default     = "trial.jwt"
+}
+
+# ============================================================
+# FLO Namespace Configuration
+# ============================================================
+
+variable "flo_namespace" {
+  description = "Namespace for F5 Lifecycle Operator"
+  type        = string
+  default     = "f5-bnk"
+}
+
+variable "flo_utils_namespace" {
+  description = "Namespace for F5 utility components"
+  type        = string
+  default     = "f5-utils"
+}
+
+variable "cert_manager_namespace" {
+  description = "Kubernetes namespace for cert-manager - used by cert-manager, flo modules"
+  type        = string
+  default     = "cert-manager"
+}
+
+# ============================================================
+# BIG-IP CIS Configuration
+# ============================================================
+
+variable "bigip_username" {
+  description = "BIG-IP username for CIS controller login"
+  type        = string
+  default     = "admin"
+}
+
+variable "bigip_password" {
+  description = "BIG-IP password for CIS controller login"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "bigip_url" {
+  description = "BIG-IP URL for CIS controller login"
+  type        = string
+  default     = ""
+}
+
+variable "create_roks_cluster" {
+  description = "When true, cluster is being created by ws1 — skip plan-time cluster credential fetch"
+  type        = bool
+  default     = false
+}
+
+variable "ws1_dependency_id" {
+  description = "ws1 sentinel ID — when set, defers runtime_config fetch to apply time after ws1 completes"
+  type        = string
+  default     = null
+}

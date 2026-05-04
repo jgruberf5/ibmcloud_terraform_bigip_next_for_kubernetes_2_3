@@ -1,22 +1,22 @@
 # ============================================================
 # Root Terraform Variables
-# F5 BIG-IP Next for Kubernetes 2.3 — Direct Terraform Project
+# F5 BIG-IP Next for Kubernetes 2.3
 #
-# Sub-module execution order:
-#   ws1  roks_cluster_4        — ROKS cluster + Transit Gateway
-#   ws2  cert_manager          — cert-manager Helm install
-#   ws3  flo                   — F5 Lifecycle Operator
-#   ws4  cneinstance           — CNEInstance custom resource
-#   ws5  license               — License custom resource
-#   ws6  testing               — Jumphost infrastructure
+# Module execution order:
+#   roks_cluster    — ROKS cluster + Transit Gateway
+#   cert_manager    — cert-manager Helm install
+#   flo             — F5 Lifecycle Operator
+#   cne_instance    — CNEInstance custom resource
+#   license         — License custom resource
+#   testing         — Jumphost infrastructure
 #
 # Cross-module wiring (handled automatically by Terraform):
-#   roks_cluster_name_or_id       ← ws1 output: roks_cluster_name
-#   testing_transit_gateway_name  ← ws1 output: roks_transit_gateway_name
-#   flo_namespace (ws4)           ← ws3 output: flo_namespace
-#   flo_trusted_profile_id        ← ws3 output: flo_trusted_profile_id
-#   flo_cluster_issuer_name       ← ws3 output: flo_cluster_issuer_name
-#   cneinstance_network_attachments ← ws3 output: cneinstance_network_attachments
+#   roks_cluster_name_or_id         ← roks_cluster output: roks_cluster_name
+#   testing_transit_gateway_name    ← roks_cluster output: transit_gateway_name
+#   flo_namespace                   ← flo output: flo_namespace
+#   flo_trusted_profile_id          ← flo output: flo_trusted_profile_id
+#   flo_cluster_issuer_name         ← flo output: flo_cluster_issuer_name
+#   cneinstance_network_attachments ← flo output: cneinstance_network_attachments
 # ============================================================
 
 
@@ -44,7 +44,7 @@ variable "ibmcloud_resource_group" {
 
 
 # ============================================================
-# ROKS Cluster (ws1)
+# roks_cluster
 # ============================================================
 
 variable "create_roks_cluster" {
@@ -121,17 +121,17 @@ variable "roks_transit_gateway_name" {
 
 
 # ============================================================
-# cert-manager (ws2)
+# cert_manager
 # ============================================================
 
 variable "install_cert_manager" {
-  description = "Install cert-manager via ws2. When false, ws2 is skipped and cert_manager_namespace is passed directly to ws3."
+  description = "Install cert-manager. When false, cert_manager_namespace is passed directly to flo."
   type        = bool
   default     = true
 }
 
 variable "cert_manager_namespace" {
-  description = "Kubernetes namespace for cert-manager — passed to ws2 (if enabled) and ws3"
+  description = "Kubernetes namespace for cert-manager"
   type        = string
   default     = "cert-manager"
 }
@@ -144,7 +144,7 @@ variable "cert_manager_version" {
 
 
 # ============================================================
-# COS Bucket — shared by FLO (ws3) and License (ws5)
+# COS Bucket — shared by flo and license
 # ============================================================
 
 variable "ibmcloud_cos_bucket_region" {
@@ -167,18 +167,18 @@ variable "ibmcloud_resources_cos_bucket" {
 
 
 # ============================================================
-# FLO / CNEInstance / License (ws3–ws5)
+# flo / cne_instance / license
 # ============================================================
 
 variable "deploy_bnk" {
-  description = "Deploy BIG-IP Next for Kubernetes — creates FLO (ws3), CNEInstance (ws4), and License (ws5). When false all three modules are skipped."
+  description = "Deploy BIG-IP Next for Kubernetes — creates flo, cne_instance, and license. When false all three modules are skipped."
   type        = bool
   default     = true
 }
 
 
 # ============================================================
-# FLO — F5 Lifecycle Operator (ws3)
+# flo — F5 Lifecycle Operator
 # ============================================================
 
 variable "far_repo_url" {
@@ -200,7 +200,7 @@ variable "f5_cne_far_auth_file" {
 }
 
 variable "f5_cne_subscription_jwt_file" {
-  description = "Subscription JWT filename in the COS bucket — used by FLO (ws3) and License (ws5)"
+  description = "Subscription JWT filename in the COS bucket — used by flo and license"
   type        = string
   default     = "trial.jwt"
 }
@@ -212,7 +212,7 @@ variable "flo_namespace" {
 }
 
 variable "flo_utils_namespace" {
-  description = "Kubernetes namespace for F5 utility components — used by FLO (ws3), CNEInstance (ws4), and License (ws5)"
+  description = "Kubernetes namespace for F5 utility components — used by flo, cne_instance, and license"
   type        = string
   default     = "f5-utils"
 }
@@ -238,35 +238,34 @@ variable "bigip_url" {
 
 
 # ============================================================
-# FLO output fallbacks (ws3 → ws4)
+# flo output fallbacks (flo → cne_instance)
 #
-# Terraform wires these automatically from ws3 module outputs
-# when deploy_bnk = true.  Set them manually only when ws3 was
-# applied in a prior state but is not included in the current
-# module configuration.
+# Terraform wires these automatically from flo module outputs.
+# Set manually only when flo was applied in a prior state but
+# is not included in the current module configuration.
 # ============================================================
 
 variable "flo_trusted_profile_id" {
-  description = "IBM Cloud Trusted Profile ID created by FLO (ws3) — wired automatically from ws3 output; set here to override"
+  description = "IBM Cloud Trusted Profile ID created by flo — wired automatically from flo output; set here to override"
   type        = string
   default     = ""
 }
 
 variable "flo_cluster_issuer_name" {
-  description = "Kubernetes ClusterIssuer name created by FLO (ws3) — wired automatically from ws3 output; set here to override"
+  description = "Kubernetes ClusterIssuer name created by flo — wired automatically from flo output; set here to override"
   type        = string
   default     = ""
 }
 
 variable "cneinstance_network_attachments" {
-  description = "Network attachment names for CNEInstance — wired automatically from ws3 output; set here to override"
+  description = "Network attachment names for cne_instance — wired automatically from flo output; set here to override"
   type        = list(string)
   default     = ["ens3-ipvlan-l2", "macvlan-conf"]
 }
 
 
 # ============================================================
-# CNEInstance (ws4)
+# cne_instance
 # ============================================================
 
 variable "cneinstance_deployment_size" {
@@ -283,7 +282,7 @@ variable "cneinstance_gslb_datacenter_name" {
 
 
 # ============================================================
-# License (ws5)
+# license
 # ============================================================
 
 variable "license_mode" {
@@ -294,7 +293,7 @@ variable "license_mode" {
 
 
 # ============================================================
-# Testing Jumphosts (ws6)
+# testing
 # ============================================================
 
 variable "testing_create_tgw_jumphost" {

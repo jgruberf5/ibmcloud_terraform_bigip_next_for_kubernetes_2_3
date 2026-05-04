@@ -5,10 +5,10 @@
 #          available to child modules that configure their own ibm
 #          provider from ibmcloud_api_key / ibmcloud_cluster_region.
 #
-# null  — required because ws1_roks_cluster contains a legacy proxy
+# null  — required because roks_cluster (and its nested GitHub module) contain legacy proxy
 #          empty `provider "null" {}` block; the root must declare it.
 #
-# http  — required because ws5_license contains a legacy proxy
+# http  — required because license contains a legacy proxy
 #          empty `provider "http" {}` block; the root must declare it.
 # ============================================================
 

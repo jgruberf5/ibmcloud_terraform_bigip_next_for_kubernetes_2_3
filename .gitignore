@@ -13,6 +13,9 @@ terraform.tfstate.backup
 test-runs/
 test-reports/
 
+# IBM Cloud provider kubeconfig downloads (contain cluster auth tokens)
+*_k8sconfig/
+
 # Variable files that contain secrets (API keys, passwords, etc.)
 terraform.tfvars
 

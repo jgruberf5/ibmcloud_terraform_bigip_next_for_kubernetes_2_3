@@ -82,17 +82,16 @@ if [[ "$need_refresh" == true ]]; then
     ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION"
 
     echo "cloud-exec: fetching kubeconfig (cluster=$CLUSTER)..." >&2
-    # `--export` downloads and prints `export KUBECONFIG=<path>`; we copy
-    # that path to our pinned location so kubectl/oc both see it.
-    EXPORT_LINE=$(ibmcloud ks cluster config --cluster "$CLUSTER" --admin --export)
-    SRC=${EXPORT_LINE#export KUBECONFIG=}
-    SRC=${SRC%$'\r'}
-    [[ -f "$SRC" ]] || {
-        echo "cloud-exec: kubeconfig was not produced." >&2
-        echo "  ibmcloud said: $EXPORT_LINE" >&2
+    # `ibmcloud ks cluster config --admin` writes the kubeconfig to
+    # $HOME/.kube/config; KUBECONFIG is unset in the subshell so it
+    # lands at the default path regardless of our pinned export.
+    DEFAULT_KUBE="${HOME:-/root}/.kube/config"
+    ( unset KUBECONFIG; ibmcloud ks cluster config --cluster "$CLUSTER" --admin )
+    [[ -f "$DEFAULT_KUBE" ]] || {
+        echo "cloud-exec: kubeconfig not produced at $DEFAULT_KUBE" >&2
         exit 1
     }
-    cp "$SRC" "$KUBECONFIG"
+    cp "$DEFAULT_KUBE" "$KUBECONFIG"
     chmod 600 "$KUBECONFIG"
 fi
 

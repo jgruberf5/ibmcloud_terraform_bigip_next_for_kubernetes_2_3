@@ -18,6 +18,11 @@ Each deployment phase has its own self-contained module under `modules/`:
 | 5 | `license`       | License custom resource |
 | 6 | `testing`       | Optional jumphost infrastructure for validation |
 
+Phases 3–5 are gated by the top-level `deploy_bnk` flag (default `true`).
+Set `deploy_bnk = false` in `terraform.tfvars` to provision only the cluster
+and cert-manager — useful for staging the prerequisites separately from the
+BIG-IP Next workload.
+
 The root module (`main.tf`) instantiates each sub-module once and wires
 outputs of earlier phases into the inputs of later phases. The Terraform
 dependency graph then enforces the correct execution order automatically:
@@ -56,6 +61,15 @@ terraform destroy
 
 See `terraform.tfvars.example` for the full set of inputs and their defaults.
 The only variable without a default is `ibmcloud_api_key`.
+
+Common toggles in `terraform.tfvars`:
+
+| Variable                     | Default | Effect when `false` |
+|------------------------------|:-------:|---------------------|
+| `create_roks_cluster`         | `true`  | Use an existing cluster (`roks_cluster_id_or_name`) instead of creating one |
+| `create_roks_transit_gateway` | `true`  | Reuse an existing Transit Gateway (`roks_transit_gateway_name`) |
+| `install_cert_manager`        | `true`  | Skip the cert-manager Helm install (FLO uses an already-installed one) |
+| `deploy_bnk`                  | `true`  | Skip phases 3–5 (FLO, CNEInstance, License) — cluster + cert-manager only |
 
 ## deploy.sh
 

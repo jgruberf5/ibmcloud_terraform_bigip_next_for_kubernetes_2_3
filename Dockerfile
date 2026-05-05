@@ -68,13 +68,12 @@ RUN curl -fsSL "https://download.clis.cloud.ibm.com/ibm-cloud-cli/${IBMCLOUD_CLI
     && ln -sf /lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
     && ibmcloud --version
 
-# Plugins the testing jumphost installs:
-#   container-service   for ROKS
-#   openshift           for `ibmcloud oc`
+# IBM Cloud CLI plugins:
+#   container-service   for ROKS / IKS — also exposes `ibmcloud oc` for
+#                       OpenShift commands (the alias is kubernetes-service / ks)
 #   vpc-infrastructure  for VPC operations
 RUN ibmcloud config --check-version false \
     && ibmcloud plugin install container-service -f \
-    && ibmcloud plugin install openshift -f \
     && ibmcloud plugin install vpc-infrastructure -f
 
 # OpenShift `oc` CLI — pinned to the cluster's minor (4.18) so commands

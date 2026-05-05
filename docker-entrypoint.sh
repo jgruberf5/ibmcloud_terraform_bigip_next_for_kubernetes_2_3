@@ -55,4 +55,30 @@ if [[ ! -d "$WORK_DIR/.terraform" ]]; then
     terraform init -input=false -no-color >/dev/null 2>&1 || true
 fi
 
+# Resolve IBM Cloud credentials and KUBECONFIG defaults from env vars
+# or /work/terraform.tfvars so EVERY shell inside the container picks
+# them up — including `./build.sh shell`, plain `docker run … bash`,
+# and cloud-exec.  With IBMCLOUD_API_KEY exported here, `ibmcloud login`
+# never falls back to the email/password prompt.
+read_tfvar() {
+    local key="$1" file="$2"
+    [[ -f "$file" ]] || return 0
+    awk -F'"' "/^[[:space:]]*$key[[:space:]]*=/{print \$2; exit}" "$file"
+}
+TFVARS="$WORK_DIR/terraform.tfvars"
+
+if [[ -z "${IBMCLOUD_API_KEY:-}" ]]; then
+    export IBMCLOUD_API_KEY="${TF_VAR_ibmcloud_api_key:-$(read_tfvar ibmcloud_api_key "$TFVARS")}"
+fi
+if [[ -z "${IBMCLOUD_REGION:-}" ]]; then
+    export IBMCLOUD_REGION="${TF_VAR_ibmcloud_cluster_region:-$(read_tfvar ibmcloud_cluster_region "$TFVARS")}"
+fi
+: "${IBMCLOUD_REGION:=ca-tor}"
+export IBMCLOUD_REGION
+
+# kubectl / oc read $KUBECONFIG. Pin it to a stable path inside the volume
+# so the kubeconfig survives container restarts and is shared by both CLIs.
+export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.kube/config}"
+mkdir -p "$(dirname "$KUBECONFIG")"
+
 exec "$@"

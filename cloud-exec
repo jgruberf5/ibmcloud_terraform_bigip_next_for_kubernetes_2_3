@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
-# cloud-exec — set up ibmcloud / kubectl / oc auth, then either
-#              drop into an interactive bash or exec the supplied
-#              command.
+# cloud-exec — fetch the project's ROKS cluster kubeconfig and either
+#              run a command or drop into an interactive bash.
 #
-# Resolves credentials and the cluster identifier from (in order):
-#   - existing IBMCLOUD_API_KEY / IBMCLOUD_REGION env vars
-#   - TF_VAR_ibmcloud_api_key / TF_VAR_ibmcloud_cluster_region
-#   - /work/terraform.tfvars
+# IBMCLOUD_API_KEY / IBMCLOUD_REGION / KUBECONFIG are exported by
+# docker-entrypoint.sh from env vars or /work/terraform.tfvars; this
+# script just discovers the cluster and drives `ibmcloud login` +
+# `ibmcloud ks cluster config`.
 #
 # Cluster lookup order:
 #   - -c <cluster> argument
@@ -15,9 +14,8 @@
 #   - roks_cluster_id_or_name (when create_roks_cluster=false)
 #   - openshift_cluster_name  (when create_roks_cluster=true)
 #
-# The kubeconfig is cached at /work/.kube/config and re-fetched
-# only if missing, older than 30 minutes, or pointing at a
-# different cluster.
+# The kubeconfig is cached at $KUBECONFIG and re-fetched only if
+# missing, older than 30 minutes, or pointing at a different cluster.
 #
 # Usage:
 #   cloud-exec                            # interactive shell
@@ -44,16 +42,17 @@ while [[ $# -gt 0 && "$1" == -* ]]; do
     esac
 done
 
-# ── Credentials ─────────────────────────────────────────────
-: "${IBMCLOUD_API_KEY:=${TF_VAR_ibmcloud_api_key:-$(read_tfvar ibmcloud_api_key)}}"
-: "${IBMCLOUD_REGION:=${TF_VAR_ibmcloud_cluster_region:-$(read_tfvar ibmcloud_cluster_region)}}"
-: "${IBMCLOUD_REGION:=ca-tor}"
-[[ -n "$IBMCLOUD_API_KEY" ]] || {
-    echo "cloud-exec: IBM Cloud API key not found." >&2
-    echo "  Set TF_VAR_ibmcloud_api_key, or put ibmcloud_api_key in $TFVARS." >&2
+# ── Credentials sanity check ────────────────────────────────
+# The entrypoint should have set these.  If they are still missing
+# the user mounted no tfvars and passed no env vars; fail loudly.
+[[ -n "${IBMCLOUD_API_KEY:-}" ]] || {
+    echo "cloud-exec: IBMCLOUD_API_KEY not set." >&2
+    echo "  Provide -e TF_VAR_ibmcloud_api_key=... or bind-mount terraform.tfvars at /work/." >&2
     exit 1
 }
-export IBMCLOUD_API_KEY IBMCLOUD_REGION
+: "${IBMCLOUD_REGION:=ca-tor}"
+export KUBECONFIG="${KUBECONFIG:-/work/.kube/config}"
+mkdir -p "$(dirname "$KUBECONFIG")"
 
 # ── Cluster discovery ───────────────────────────────────────
 CLUSTER="$CLUSTER_OVERRIDE"
@@ -67,10 +66,7 @@ CLUSTER="$CLUSTER_OVERRIDE"
     exit 1
 }
 
-# ── Kubeconfig (cached in volume) ──────────────────────────
-export KUBECONFIG="${KUBECONFIG:-/work/.kube/config}"
-mkdir -p "$(dirname "$KUBECONFIG")"
-
+# ── Login + kubeconfig (cached in volume) ───────────────────
 need_refresh=true
 if [[ -s "$KUBECONFIG" ]] \
    && (( $(date +%s) - $(stat -c %Y "$KUBECONFIG") < 1800 )) \
@@ -79,9 +75,24 @@ if [[ -s "$KUBECONFIG" ]] \
 fi
 
 if [[ "$need_refresh" == true ]]; then
-    echo "cloud-exec: fetching kubeconfig (cluster=$CLUSTER region=$IBMCLOUD_REGION)..." >&2
-    ibmcloud login -q >/dev/null
-    ibmcloud ks cluster config --cluster "$CLUSTER" --admin --output yaml > "$KUBECONFIG"
+    echo "cloud-exec: ibmcloud login (region=$IBMCLOUD_REGION)..." >&2
+    # --apikey passed explicitly so login is unambiguously non-interactive.
+    # Output is NOT redirected — any prompt or error surfaces immediately
+    # instead of silently hanging on stdin.
+    ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION"
+
+    echo "cloud-exec: fetching kubeconfig (cluster=$CLUSTER)..." >&2
+    # `--export` downloads and prints `export KUBECONFIG=<path>`; we copy
+    # that path to our pinned location so kubectl/oc both see it.
+    EXPORT_LINE=$(ibmcloud ks cluster config --cluster "$CLUSTER" --admin --export)
+    SRC=${EXPORT_LINE#export KUBECONFIG=}
+    SRC=${SRC%$'\r'}
+    [[ -f "$SRC" ]] || {
+        echo "cloud-exec: kubeconfig was not produced." >&2
+        echo "  ibmcloud said: $EXPORT_LINE" >&2
+        exit 1
+    }
+    cp "$SRC" "$KUBECONFIG"
     chmod 600 "$KUBECONFIG"
 fi
 

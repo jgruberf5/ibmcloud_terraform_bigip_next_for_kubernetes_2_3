@@ -76,7 +76,9 @@ RUN mkdir -p "${TF_PLUGIN_CACHE_DIR}" \
     && terraform init -backend=false -input=false \
     && chmod +x ${PROJECT_DIR}/deploy.sh \
                  ${PROJECT_DIR}/run_tests.sh \
-                 ${PROJECT_DIR}/docker-entrypoint.sh
+                 ${PROJECT_DIR}/docker-entrypoint.sh \
+                 ${PROJECT_DIR}/cloud-exec \
+    && ln -sf ${PROJECT_DIR}/cloud-exec /usr/local/bin/cloud-exec
 
 # Mutable workdir backed by a Docker volume at runtime.
 WORKDIR ${WORK_DIR}

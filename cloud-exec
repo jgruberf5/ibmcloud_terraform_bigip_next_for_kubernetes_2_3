@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# ============================================================
+# cloud-exec — set up ibmcloud / kubectl / oc auth, then either
+#              drop into an interactive bash or exec the supplied
+#              command.
+#
+# Resolves credentials and the cluster identifier from (in order):
+#   - existing IBMCLOUD_API_KEY / IBMCLOUD_REGION env vars
+#   - TF_VAR_ibmcloud_api_key / TF_VAR_ibmcloud_cluster_region
+#   - /work/terraform.tfvars
+#
+# Cluster lookup order:
+#   - -c <cluster> argument
+#   - terraform output -raw roks_cluster_id (post-apply)
+#   - roks_cluster_id_or_name (when create_roks_cluster=false)
+#   - openshift_cluster_name  (when create_roks_cluster=true)
+#
+# The kubeconfig is cached at /work/.kube/config and re-fetched
+# only if missing, older than 30 minutes, or pointing at a
+# different cluster.
+#
+# Usage:
+#   cloud-exec                            # interactive shell
+#   cloud-exec kubectl get pods -A        # one-shot command
+#   cloud-exec -c my-cluster oc whoami    # override cluster lookup
+# ============================================================
+set -euo pipefail
+
+TFVARS=/work/terraform.tfvars
+
+read_tfvar() {
+    [[ -f "$TFVARS" ]] || return 0
+    awk -F'"' "/^[[:space:]]*$1[[:space:]]*=/{print \$2; exit}" "$TFVARS"
+}
+
+# ── Arg parsing ─────────────────────────────────────────────
+CLUSTER_OVERRIDE=""
+while [[ $# -gt 0 && "$1" == -* ]]; do
+    case "$1" in
+        -c|--cluster) shift; CLUSTER_OVERRIDE="${1:-}"; shift || true ;;
+        --)           shift; break ;;
+        -h|--help)    sed -n '2,/^[^#]/{/^#/!q; s/^# \{0,2\}//p}' "$0"; exit 0 ;;
+        *)            break ;;
+    esac
+done
+
+# ── Credentials ─────────────────────────────────────────────
+: "${IBMCLOUD_API_KEY:=${TF_VAR_ibmcloud_api_key:-$(read_tfvar ibmcloud_api_key)}}"
+: "${IBMCLOUD_REGION:=${TF_VAR_ibmcloud_cluster_region:-$(read_tfvar ibmcloud_cluster_region)}}"
+: "${IBMCLOUD_REGION:=ca-tor}"
+[[ -n "$IBMCLOUD_API_KEY" ]] || {
+    echo "cloud-exec: IBM Cloud API key not found." >&2
+    echo "  Set TF_VAR_ibmcloud_api_key, or put ibmcloud_api_key in $TFVARS." >&2
+    exit 1
+}
+export IBMCLOUD_API_KEY IBMCLOUD_REGION
+
+# ── Cluster discovery ───────────────────────────────────────
+CLUSTER="$CLUSTER_OVERRIDE"
+[[ -z "$CLUSTER" ]] && CLUSTER=$(terraform output -raw roks_cluster_id 2>/dev/null || true)
+[[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar roks_cluster_id_or_name)
+[[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar openshift_cluster_name)
+[[ -n "$CLUSTER" ]] || {
+    echo "cloud-exec: cluster not found." >&2
+    echo "  Pass -c <name>, run after terraform apply, or set roks_cluster_id_or_name" >&2
+    echo "  / openshift_cluster_name in $TFVARS." >&2
+    exit 1
+}
+
+# ── Kubeconfig (cached in volume) ──────────────────────────
+export KUBECONFIG="${KUBECONFIG:-/work/.kube/config}"
+mkdir -p "$(dirname "$KUBECONFIG")"
+
+need_refresh=true
+if [[ -s "$KUBECONFIG" ]] \
+   && (( $(date +%s) - $(stat -c %Y "$KUBECONFIG") < 1800 )) \
+   && grep -q "name: $CLUSTER" "$KUBECONFIG" 2>/dev/null; then
+    need_refresh=false
+fi
+
+if [[ "$need_refresh" == true ]]; then
+    echo "cloud-exec: fetching kubeconfig (cluster=$CLUSTER region=$IBMCLOUD_REGION)..." >&2
+    ibmcloud login -q >/dev/null
+    ibmcloud ks cluster config --cluster "$CLUSTER" --admin --output yaml > "$KUBECONFIG"
+    chmod 600 "$KUBECONFIG"
+fi
+
+# ── Hand off ────────────────────────────────────────────────
+if [[ $# -eq 0 ]]; then
+    exec bash --rcfile <(cat <<EOF
+[[ -f /etc/profile ]]    && source /etc/profile
+[[ -f \$HOME/.bashrc ]]  && source \$HOME/.bashrc
+PS1='(cloud-exec:$CLUSTER) \$ '
+echo "Cluster=$CLUSTER  Region=$IBMCLOUD_REGION  KUBECONFIG=$KUBECONFIG"
+echo "ibmcloud / kubectl / oc are ready."
+EOF
+)
+else
+    exec "$@"
+fi

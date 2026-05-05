@@ -378,6 +378,52 @@ Inside the container `/work` is your CWD, every project file is
 available (via symlinks to `/opt/tf-project`), and any state, logs,
 or test-runs you produce stay in `bnk-state`.
 
+### `cloud-exec` — run with `ibmcloud` / `kubectl` / `oc` pre-authenticated
+
+`cloud-exec` is a small helper baked into the image at
+`/usr/local/bin/cloud-exec` that resolves the IBM Cloud API key and
+the cluster identifier from the same sources the project already
+uses, fetches an admin kubeconfig, and then either runs your command
+or drops you into an interactive bash with everything in place.
+
+It looks for credentials and the cluster in this order, stopping at
+the first hit:
+
+| Value | Sources (in order) |
+|---|---|
+| API key | `IBMCLOUD_API_KEY`, `TF_VAR_ibmcloud_api_key`, `ibmcloud_api_key` in `terraform.tfvars` |
+| Region  | `IBMCLOUD_REGION`, `TF_VAR_ibmcloud_cluster_region`, `ibmcloud_cluster_region` in `terraform.tfvars`, fallback `ca-tor` |
+| Cluster | `-c <name>` arg, `terraform output -raw roks_cluster_id`, `roks_cluster_id_or_name` in `terraform.tfvars`, `openshift_cluster_name` in `terraform.tfvars` |
+
+Two modes:
+
+```bash
+# Interactive — drops into bash; cluster name shows in the prompt
+docker run -it --rm \
+  -v bnk-state:/work \
+  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
+  ibmcloud-terraform-bnk-2-3 cloud-exec
+
+# One-shot — exec the supplied command with auth set up
+docker run -it --rm \
+  -v bnk-state:/work \
+  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
+  ibmcloud-terraform-bnk-2-3 cloud-exec kubectl get pods -A
+
+docker run -it --rm ... ibmcloud-terraform-bnk-2-3 cloud-exec oc adm top nodes
+docker run -it --rm ... ibmcloud-terraform-bnk-2-3 cloud-exec ibmcloud ks cluster ls
+```
+
+The kubeconfig is cached at `/work/.kube/config`. Subsequent
+`cloud-exec` invocations reuse it as long as it is less than 30
+minutes old and points at the same cluster, so back-to-back
+commands skip the ~3 s login round-trip. Use `-c <cluster>` to
+target a different cluster than the one in state/tfvars.
+
+`terraform plan / apply / destroy` continue to work without
+`cloud-exec` — terraform reads `TF_VAR_ibmcloud_api_key` directly
+and the modules fetch their own per-module kubeconfigs as needed.
+
 ## Requirements
 
 - Terraform >= 1.5

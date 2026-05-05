@@ -21,7 +21,7 @@ FROM alpine:3.19
 
 ARG TERRAFORM_VERSION=1.9.8
 ARG ALPINE_VERSION=3.19
-ARG OC_VERSION=4.18
+ARG OC_VERSION=stable-4.18
 ARG IBMCLOUD_CLI_VERSION=2.27.0
 
 # kubectl and helm live in the alpine community repository.
@@ -76,10 +76,12 @@ RUN ibmcloud config --check-version false \
     && ibmcloud plugin install container-service -f \
     && ibmcloud plugin install vpc-infrastructure -f
 
-# OpenShift `oc` CLI — pinned to the cluster's minor (4.18) so commands
-# stay compatible with the openshift_cluster_version default. The tarball
-# also ships kubectl; we extract only `oc` to avoid clobbering the
-# alpine-managed kubectl above.
+# OpenShift `oc` CLI — pinned to the latest 4.18.x via the mirror's
+# stable-4.18 channel so commands stay compatible with the
+# openshift_cluster_version default. Override with --build-arg
+# OC_VERSION=stable-4.19 (or an exact version like 4.18.21) when the
+# cluster minor changes. The tarball also ships kubectl; we extract
+# only `oc` to avoid clobbering the alpine-managed kubectl above.
 RUN curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
             -o /tmp/oc.tar.gz \
     && tar -xzf /tmp/oc.tar.gz -C /usr/local/bin/ oc \

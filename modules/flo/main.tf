@@ -43,7 +43,7 @@ module "flo" {
 
   depends_on = [data.ibm_container_cluster_config.runtime_config, null_resource.cert_manager_gate]
 
-  enabled = true
+  enabled = var.deploy_bnk
 
   cert_manager_crd_ready = true
 

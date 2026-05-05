@@ -96,15 +96,22 @@ module "flo" {
   create_roks_cluster           = var.create_roks_cluster
   roks_cluster_dependency_id    = module.roks_cluster.cluster_ready_id
   cert_manager_dependency_id    = module.cert_manager.cert_manager_ready_id
+  deploy_bnk                    = var.deploy_bnk
 }
 
 locals {
   # Wire flo outputs into cne_instance inputs, falling back to root variables
-  # when flo output is not yet in state.
-  flo_namespace                   = try(module.flo.flo_namespace, var.flo_namespace)
-  flo_trusted_profile_id          = try(module.flo.flo_trusted_profile_id, var.flo_trusted_profile_id)
-  flo_cluster_issuer_name         = try(module.flo.flo_cluster_issuer_name, var.flo_cluster_issuer_name)
-  cneinstance_network_attachments = try(module.flo.cneinstance_network_attachments, var.cneinstance_network_attachments)
+  # when flo output is not yet in state, errors out, or is null (e.g. when
+  # var.deploy_bnk = false disables the inner flo module and its outputs return null).
+  _flo_namespace_out                   = try(module.flo.flo_namespace, null)
+  _flo_trusted_profile_id_out          = try(module.flo.flo_trusted_profile_id, null)
+  _flo_cluster_issuer_name_out         = try(module.flo.flo_cluster_issuer_name, null)
+  _flo_cneinstance_network_attachments = try(module.flo.cneinstance_network_attachments, null)
+
+  flo_namespace                   = local._flo_namespace_out != null ? local._flo_namespace_out : var.flo_namespace
+  flo_trusted_profile_id          = local._flo_trusted_profile_id_out != null ? local._flo_trusted_profile_id_out : var.flo_trusted_profile_id
+  flo_cluster_issuer_name         = local._flo_cluster_issuer_name_out != null ? local._flo_cluster_issuer_name_out : var.flo_cluster_issuer_name
+  cneinstance_network_attachments = local._flo_cneinstance_network_attachments != null ? local._flo_cneinstance_network_attachments : var.cneinstance_network_attachments
 }
 
 
@@ -131,6 +138,7 @@ module "cne_instance" {
   create_roks_cluster              = var.create_roks_cluster
   roks_cluster_dependency_id       = module.roks_cluster.cluster_ready_id
   flo_dependency_id                = module.flo.flo_ready_id
+  deploy_bnk                       = var.deploy_bnk
 }
 
 
@@ -155,6 +163,7 @@ module "license" {
   create_roks_cluster           = var.create_roks_cluster
   roks_cluster_dependency_id    = module.roks_cluster.cluster_ready_id
   cneinstance_dependency_id     = module.cne_instance.cneinstance_ready_id
+  deploy_bnk                    = var.deploy_bnk
 }
 
 

@@ -124,3 +124,9 @@ variable "flo_dependency_id" {
   type        = string
   default     = null
 }
+
+variable "deploy_bnk" {
+  description = "Deploy BIG-IP Next for Kubernetes — when false the inner cneinstance module is disabled and no CNEInstance resources are created"
+  type        = bool
+  default     = true
+}

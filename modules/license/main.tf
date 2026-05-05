@@ -38,7 +38,7 @@ module "license" {
     http = http
   }
 
-  enabled = true
+  enabled = var.deploy_bnk
 
   use_cos_bucket = true
   jwt_token = ""

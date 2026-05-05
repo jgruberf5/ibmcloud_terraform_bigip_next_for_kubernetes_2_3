@@ -102,3 +102,9 @@ variable "cneinstance_dependency_id" {
   type        = string
   default     = null
 }
+
+variable "deploy_bnk" {
+  description = "Deploy BIG-IP Next for Kubernetes — when false the inner license module is disabled and no License resources are created"
+  type        = bool
+  default     = true
+}

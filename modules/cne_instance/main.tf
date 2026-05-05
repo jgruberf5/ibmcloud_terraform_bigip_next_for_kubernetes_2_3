@@ -29,7 +29,7 @@ terraform {
 module "cneinstance" {
   source = "./modules/cneinstance"
 
-  enabled = true
+  enabled = var.deploy_bnk
 
   flo_namespace   = var.flo_namespace
   utils_namespace = var.flo_utils_namespace

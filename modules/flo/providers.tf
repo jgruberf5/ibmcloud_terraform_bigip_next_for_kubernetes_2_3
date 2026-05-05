@@ -10,6 +10,7 @@ provider "ibm" {
 data "ibm_container_cluster_config" "cluster_config" {
   count           = var.create_roks_cluster ? 0 : 1
   cluster_name_id = var.roks_cluster_name_or_id
+  config_dir      = path.module
 }
 
 provider "kubernetes" {

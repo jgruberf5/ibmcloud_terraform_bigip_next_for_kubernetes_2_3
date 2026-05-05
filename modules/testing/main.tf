@@ -72,9 +72,9 @@ locals {
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
     rm -f openshift-client-linux.tar.gz oc kubectl
 
-    # IBM Cloud plugins
+    # IBM Cloud plugins — container-service exposes `ibmcloud oc` for
+    # OpenShift commands (no separate openshift plugin in the repo).
     ibmcloud plugin install container-service -f
-    ibmcloud plugin install openshift -f
     ibmcloud plugin install vpc-infrastructure -f
 
     # Pull kubeconfig from the IBM Cloud OpenShift cluster.

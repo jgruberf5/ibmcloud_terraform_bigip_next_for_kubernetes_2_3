@@ -228,14 +228,17 @@ tf_run() {
 # ── Phase runners ─────────────────────────────────────────────
 
 phase_init() {
-    local dir="$1" log="$dir/phase-init.log"
+    local dir="$1"
+    local log="$dir/phase-init.log"
     tf_run "$dir" init \
         -input=false -no-color \
         >> "$log" 2>&1
 }
 
 phase_plan() {
-    local dir="$1" tfvars="$dir/$2" log="$dir/phase-plan.log"
+    local dir="$1"
+    local tfvars="$dir/$2"
+    local log="$dir/phase-plan.log"
     tf_run "$dir" plan \
         -input=false -no-color \
         -var-file="$tfvars" \
@@ -244,7 +247,9 @@ phase_plan() {
 }
 
 phase_apply() {
-    local dir="$1" tfvars="$dir/$2" log="$dir/phase-apply.log"
+    local dir="$1"
+    local tfvars="$dir/$2"
+    local log="$dir/phase-apply.log"
     tf_run "$dir" apply \
         -auto-approve -input=false -no-color \
         -var-file="$tfvars" \
@@ -253,7 +258,9 @@ phase_apply() {
 }
 
 phase_destroy() {
-    local dir="$1" tfvars="$dir/$2" log="$dir/phase-destroy.log"
+    local dir="$1"
+    local tfvars="$dir/$2"
+    local log="$dir/phase-destroy.log"
     tf_run "$dir" destroy \
         -auto-approve -input=false -no-color \
         -var-file="$tfvars" \

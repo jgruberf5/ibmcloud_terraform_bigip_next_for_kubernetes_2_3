@@ -92,6 +92,7 @@ resource "null_resource" "bnk_license" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      # Wait for the License CRD's API group to be served.
       code=000
       for i in $(seq 1 30); do
         code=$(curl -sk -o /dev/null -w "%%{http_code}" \
@@ -105,11 +106,35 @@ resource "null_resource" "bnk_license" {
         echo "ERROR: License CRD not available after 300s (last HTTP status: $code)" >&2
         exit 1
       fi
-      curl -f -X PATCH \
-        -H "Authorization: Bearer ${var.kube_token}" \
-        -H "Content-Type: application/apply-patch+yaml" \
-        -k "${var.kube_host}/apis/k8s.f5net.com/v1/namespaces/${var.utils_namespace}/licenses/bnk-license?fieldManager=terraform&force=true" \
-        -d '{"apiVersion":"k8s.f5net.com/v1","kind":"License","metadata":{"name":"bnk-license","namespace":"${var.utils_namespace}"},"spec":{"jwt":"${local.jwt_token}","operationMode":"${var.license_mode}"}}'
+      # Apply the License CR. Retry on transient/admission-webhook-not-ready
+      # errors (4xx/5xx) — the API group can be served before the FLO admission
+      # webhook is reachable, producing 403/503 responses for ~30-60s.
+      patch_body='{"apiVersion":"k8s.f5net.com/v1","kind":"License","metadata":{"name":"bnk-license","namespace":"${var.utils_namespace}"},"spec":{"jwt":"${local.jwt_token}","operationMode":"${var.license_mode}"}}'
+      patch_url="${var.kube_host}/apis/k8s.f5net.com/v1/namespaces/${var.utils_namespace}/licenses/bnk-license?fieldManager=terraform&force=true"
+      patch_status=000
+      for i in $(seq 1 30); do
+        body_file=$(mktemp)
+        patch_status=$(curl -sk -o "$body_file" -w "%%{http_code}" -X PATCH \
+          -H "Authorization: Bearer ${var.kube_token}" \
+          -H "Content-Type: application/apply-patch+yaml" \
+          "$patch_url" -d "$patch_body")
+        case "$patch_status" in
+          2??)
+            rm -f "$body_file"
+            break
+            ;;
+          *)
+            echo "License PATCH attempt $i/30 returned HTTP $patch_status, retrying in 10s..." >&2
+            sed -E 's/("jwt":")[^"]*/\1<redacted>/g' "$body_file" >&2 || true
+            rm -f "$body_file"
+            sleep 10
+            ;;
+        esac
+      done
+      case "$patch_status" in
+        2??) echo "License applied (HTTP $patch_status)";;
+        *)   echo "ERROR: License PATCH failed after 30 attempts (last HTTP $patch_status)" >&2; exit 1;;
+      esac
     EOT
   }
 

@@ -22,6 +22,7 @@ FROM alpine:3.19
 ARG TERRAFORM_VERSION=1.9.8
 ARG ALPINE_VERSION=3.19
 ARG OC_VERSION=4.18
+ARG IBMCLOUD_CLI_VERSION=2.27.0
 
 # kubectl and helm live in the alpine community repository.
 # gcompat provides the glibc shim ibmcloud and oc need on musl.
@@ -42,11 +43,36 @@ RUN echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >>
     && rm /tmp/terraform.zip \
     && apk del .build-deps
 
-# IBM Cloud CLI + the same plugins the testing jumphost installs
-# (container-service for ROKS, openshift for `ibmcloud oc`, and
-# vpc-infrastructure for VPC operations).
-RUN curl -fsSL https://clis.cloud.ibm.com/install/linux | sh \
-    && ibmcloud config --check-version=false \
+# IBM Cloud CLI — install from the IBM download directly so the install
+# step is just file extraction (the `curl | sh` script's tail end invokes
+# `ibmcloud --version` for verification, which can fail on Alpine even
+# with gcompat).  We then:
+#   * `find` for the binary (the tarball ships it at either the top level
+#     or under bin/ across versions),
+#   * create the /lib64/ld-linux-x86-64.so.2 symlink that glibc binaries'
+#     PT_INTERP hard-codes (gcompat provides /lib/ld-linux-x86-64.so.2 on
+#     musl Alpine but does not parallel it under /lib64/),
+#   * verify with `ibmcloud --version`.
+# If the binary is missing the build prints the extracted tree so the
+# next iteration can fix the path quickly.  Plugins go in a separate RUN
+# so a failure there doesn't force re-downloading the CLI tarball.
+RUN curl -fsSL "https://download.clis.cloud.ibm.com/ibm-cloud-cli/${IBMCLOUD_CLI_VERSION}/IBM_Cloud_CLI_${IBMCLOUD_CLI_VERSION}_amd64.tar.gz" \
+            -o /tmp/ibmcloud.tar.gz \
+    && mkdir -p /usr/local/ibmcloud \
+    && tar -xzf /tmp/ibmcloud.tar.gz -C /usr/local/ibmcloud --strip-components=1 \
+    && rm /tmp/ibmcloud.tar.gz \
+    && IBMCLOUD_BIN=$(find /usr/local/ibmcloud -maxdepth 3 -type f -name ibmcloud | head -1) \
+    && [ -n "$IBMCLOUD_BIN" ] || { echo "ibmcloud binary not found in tarball; layout was:"; find /usr/local/ibmcloud | head -50; exit 1; } \
+    && ln -sf "$IBMCLOUD_BIN" /usr/local/bin/ibmcloud \
+    && mkdir -p /lib64 \
+    && ln -sf /lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
+    && ibmcloud --version
+
+# Plugins the testing jumphost installs:
+#   container-service   for ROKS
+#   openshift           for `ibmcloud oc`
+#   vpc-infrastructure  for VPC operations
+RUN ibmcloud config --check-version false \
     && ibmcloud plugin install container-service -f \
     && ibmcloud plugin install openshift -f \
     && ibmcloud plugin install vpc-infrastructure -f

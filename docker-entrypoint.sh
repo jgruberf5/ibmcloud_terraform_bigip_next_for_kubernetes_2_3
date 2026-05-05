@@ -81,4 +81,22 @@ export IBMCLOUD_REGION
 export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.kube/config}"
 mkdir -p "$(dirname "$KUBECONFIG")"
 
+# ibmcloud stores its session in ~/.bluemix/config.json plus the plugin
+# directories.  Without the symlink below this state lives in the
+# container's writable layer and is lost on `--rm`, forcing a fresh
+# auto-login on every container.  Migrate the image's plugins into the
+# /work volume on first use, then symlink /root/.bluemix to that path
+# so login state, plugin caches, and cluster downloads all persist.
+HOME_BLUEMIX="${HOME:-/root}/.bluemix"
+WORK_BLUEMIX="$WORK_DIR/.bluemix"
+if [[ ! -L "$HOME_BLUEMIX" ]]; then
+    if [[ ! -d "$WORK_BLUEMIX" && -d "$HOME_BLUEMIX" ]]; then
+        cp -a "$HOME_BLUEMIX" "$WORK_BLUEMIX"
+    else
+        mkdir -p "$WORK_BLUEMIX"
+    fi
+    rm -rf "$HOME_BLUEMIX"
+    ln -s "$WORK_BLUEMIX" "$HOME_BLUEMIX"
+fi
+
 exec "$@"

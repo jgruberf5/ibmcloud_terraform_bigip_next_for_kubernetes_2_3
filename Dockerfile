@@ -9,8 +9,11 @@
 #
 # Modules call out to kubectl / helm / curl / tar via local-exec
 # during apply, so those CLIs are installed too.  python3 is
-# required by run_tests.sh's tfvars helpers.  All providers and
-# the .terraform.lock.hcl are baked in via `terraform init`
+# required by run_tests.sh's tfvars helpers.  ibmcloud and oc are
+# included for interactive use (login, kubeconfig fetch, OpenShift
+# inspection); they are dynamically linked against glibc so gcompat
+# is installed alongside them on musl-based Alpine.  All providers
+# and the .terraform.lock.hcl are baked in via `terraform init`
 # during the build, so runtime needs no registry access.
 # ============================================================
 
@@ -18,13 +21,16 @@ FROM alpine:3.19
 
 ARG TERRAFORM_VERSION=1.9.8
 ARG ALPINE_VERSION=3.19
+ARG OC_VERSION=4.18
 
 # kubectl and helm live in the alpine community repository.
+# gcompat provides the glibc shim ibmcloud and oc need on musl.
 RUN echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >> /etc/apk/repositories \
     && apk add --no-cache \
         bash \
         ca-certificates \
         curl \
+        gcompat \
         helm \
         kubectl \
         python3 \
@@ -35,6 +41,25 @@ RUN echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >>
     && unzip -q /tmp/terraform.zip -d /usr/local/bin/ \
     && rm /tmp/terraform.zip \
     && apk del .build-deps
+
+# IBM Cloud CLI + the same plugins the testing jumphost installs
+# (container-service for ROKS, openshift for `ibmcloud oc`, and
+# vpc-infrastructure for VPC operations).
+RUN curl -fsSL https://clis.cloud.ibm.com/install/linux | sh \
+    && ibmcloud config --check-version=false \
+    && ibmcloud plugin install container-service -f \
+    && ibmcloud plugin install openshift -f \
+    && ibmcloud plugin install vpc-infrastructure -f
+
+# OpenShift `oc` CLI — pinned to the cluster's minor (4.18) so commands
+# stay compatible with the openshift_cluster_version default. The tarball
+# also ships kubectl; we extract only `oc` to avoid clobbering the
+# alpine-managed kubectl above.
+RUN curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
+            -o /tmp/oc.tar.gz \
+    && tar -xzf /tmp/oc.tar.gz -C /usr/local/bin/ oc \
+    && chmod 0755 /usr/local/bin/oc \
+    && rm /tmp/oc.tar.gz
 
 ENV PROJECT_DIR=/opt/tf-project \
     WORK_DIR=/work

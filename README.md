@@ -183,8 +183,10 @@ necessary overrides applied; it never modifies the original.
 ├── versions.tf              # required Terraform and provider versions
 ├── deploy.sh                # interactive / non-interactive apply wrapper
 ├── run_tests.sh             # 4-scenario init/plan/apply/destroy test suite
+├── run_docker.sh            # one-line wrapper around `docker run` for the runner image
+├── cloud-exec               # in-image helper: ibmcloud/kubectl/oc pre-authenticated
 ├── Dockerfile               # builds the runner image
-├── docker-entrypoint.sh     # symlink-farm setup for the /work volume
+├── docker-entrypoint.sh     # entrypoint: symlinks, credential exports, ibmcloud state
 ├── .dockerignore            # excludes state, secrets, and caches from the build
 ├── terraform.tfvars.example # template for your terraform.tfvars
 └── modules/
@@ -255,136 +257,60 @@ docker build --build-arg TERRAFORM_VERSION=1.9.8 -t ibmcloud-terraform-bnk-2-3 .
 
 ### State persistence
 
-The image's WORKDIR is `/work`, declared as a Docker `VOLUME`.  Mount a
-named volume (or a host directory) there and **all** mutable Terraform
-output is kept across runs:
+The runtime workdir is mounted from a Docker volume.  Whatever you
+mount there persists across containers — terraform state, the
+`run_tests.sh` output tree, the cached kubeconfig, and the
+`ibmcloud` CLI's session and plugins:
 
-| Path inside `/work`                         | Contents                                  |
-|---------------------------------------------|-------------------------------------------|
+| Volume entry                               | Contents                                  |
+|--------------------------------------------|-------------------------------------------|
 | `terraform.tfstate` / `terraform.tfstate.backup` | root-module state from `terraform apply` / `deploy.sh` |
-| `test-runs/<timestamp>/`                    | every `run_tests.sh` invocation's logs and per-scenario state |
-| `terraform.tfvars` (if you put it there)    | your inputs — survives across containers  |
+| `test-runs/<timestamp>/`                   | every `run_tests.sh` invocation's logs and per-scenario state |
+| `.kube/config`                             | admin kubeconfig fetched by `cloud-exec`  |
+| `.bluemix/`                                | `ibmcloud` login session and plugins      |
 
-The entrypoint populates `/work` on first use with symlinks back into
-the baked-in project tree at `/opt/tf-project`, so terraform finds the
-`.tf` files, modules, and provider cache without copying anything.
-Image upgrades are picked up automatically — relinked on every run.
-
-Create the volume once:
-
-```bash
-docker volume create bnk-state
-```
+The entrypoint links the project's `.tf` files into the volume, so
+terraform sees them without copying.  Image upgrades are picked up
+automatically — links are refreshed on every run.
 
 ### Provide credentials and inputs
 
-Bind-mount your `terraform.tfvars` over the one in the volume (it
-contains the IBM Cloud API key, so keep it on the host):
+Bind-mount `terraform.tfvars` (it contains the IBM Cloud API key) or
+pass individual inputs via `TF_VAR_*` env vars.  The entrypoint
+extracts `ibmcloud_api_key` and `ibmcloud_cluster_region` from the
+mounted `terraform.tfvars` and exports them as `IBMCLOUD_API_KEY` /
+`IBMCLOUD_REGION`, so `ibmcloud login` inside any container session
+authenticates non-interactively.
+
+### `run_docker.sh` — the one-line wrapper
+
+Rather than spelling out `docker run -it --rm -v … ibmcloud-terraform-bnk-2-3 …`
+every time, the repo ships a small wrapper that owns the docker
+plumbing:
 
 ```bash
--v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro"
+./run_docker.sh init                # terraform init
+./run_docker.sh plan
+./run_docker.sh apply
+./run_docker.sh destroy
+./run_docker.sh deploy              # ./deploy.sh inside the container
+./run_docker.sh test [args...]      # ./run_tests.sh inside the container
+./run_docker.sh shell               # plain bash inside the container
+./run_docker.sh cloud-exec [cmd...] # see below
 ```
 
-Or pass individual inputs via `TF_VAR_*` environment variables:
-
-```bash
--e TF_VAR_ibmcloud_api_key=$IBMCLOUD_API_KEY
-```
-
-### Common commands — `docker run -it`
-
-All examples assume `bnk-state` is your volume and `terraform.tfvars`
-sits in the current directory on the host.  `--rm` removes the
-container on exit; the volume (and its state) survives.
-
-```bash
-# terraform init — already done during build, but safe to re-run
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 terraform init
-
-# terraform plan
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 terraform plan -var-file terraform.tfvars
-
-# terraform apply (interactive — prompts for "yes")
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 terraform apply -var-file terraform.tfvars
-
-# terraform destroy
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 terraform destroy -var-file terraform.tfvars
-```
-
-`deploy.sh` works the same way; pass it as the command instead of
-`terraform`:
-
-```bash
-# Interactive apply via deploy.sh
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 ./deploy.sh
-
-# Non-interactive (auto-approve) — drop -t and feed /dev/null on stdin
-docker run -i --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 ./deploy.sh < /dev/null
-```
-
-`run_tests.sh` lands its `test-runs/<timestamp>/` tree in the same
-volume, so logs and per-scenario state persist for inspection or
-recovery via `--cleanup`:
-
-```bash
-# Full 4-scenario test suite
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 ./run_tests.sh
-
-# A single scenario, leaving resources up
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 ./run_tests.sh --no-destroy 1
-
-# Recover after a crash — destroy any state still in the volume
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 ./run_tests.sh --cleanup test-runs/20260504_065205
-```
-
-For ad-hoc poking around — copying the example tfvars, viewing logs,
-re-running pieces by hand — drop into a shell:
-
-```bash
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 bash
-```
-
-Inside the container `/work` is your CWD, every project file is
-available (via symlinks to `/opt/tf-project`), and any state, logs,
-or test-runs you produce stay in `bnk-state`.
+It assumes the image was built as `ibmcloud-terraform-bnk-2-3` and
+`terraform.tfvars` sits in the current directory; both are
+overridable via `IMAGE=` / `VOLUME=` env vars.  See
+`./run_docker.sh --help` for the full list.
 
 ### `cloud-exec` — run with `ibmcloud` / `kubectl` / `oc` pre-authenticated
 
-`cloud-exec` is a small helper baked into the image at
-`/usr/local/bin/cloud-exec` that resolves the IBM Cloud API key and
-the cluster identifier from the same sources the project already
-uses, fetches an admin kubeconfig, and then either runs your command
-or drops you into an interactive bash with everything in place.
+`cloud-exec` is a small helper baked into the image that resolves
+the IBM Cloud API key and the cluster identifier from the same
+sources the project already uses, fetches an admin kubeconfig, and
+then either runs your command or drops you into an interactive bash
+with everything in place.
 
 It looks for credentials and the cluster in this order, stopping at
 the first hit:
@@ -395,30 +321,23 @@ the first hit:
 | Region  | `IBMCLOUD_REGION`, `TF_VAR_ibmcloud_cluster_region`, `ibmcloud_cluster_region` in `terraform.tfvars`, fallback `ca-tor` |
 | Cluster | `-c <name>` arg, `terraform output -raw roks_cluster_id`, `roks_cluster_id_or_name` in `terraform.tfvars`, `openshift_cluster_name` in `terraform.tfvars` |
 
-Two modes:
+Two modes, surfaced through `run_docker.sh`:
 
 ```bash
-# Interactive — drops into bash; cluster name shows in the prompt
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 cloud-exec
-
-# One-shot — exec the supplied command with auth set up
-docker run -it --rm \
-  -v bnk-state:/work \
-  -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  ibmcloud-terraform-bnk-2-3 cloud-exec kubectl get pods -A
-
-docker run -it --rm ... ibmcloud-terraform-bnk-2-3 cloud-exec oc adm top nodes
-docker run -it --rm ... ibmcloud-terraform-bnk-2-3 cloud-exec ibmcloud ks cluster ls
+./run_docker.sh cloud-exec                       # interactive shell
+                                                  # (cluster name in prompt)
+./run_docker.sh cloud-exec kubectl get pods -A
+./run_docker.sh cloud-exec oc adm top nodes
+./run_docker.sh cloud-exec ibmcloud ks cluster ls
+./run_docker.sh cloud-exec -c other-cluster oc whoami
 ```
 
-The kubeconfig is cached at `/work/.kube/config`. Subsequent
-`cloud-exec` invocations reuse it as long as it is less than 30
-minutes old and points at the same cluster, so back-to-back
-commands skip the ~3 s login round-trip. Use `-c <cluster>` to
-target a different cluster than the one in state/tfvars.
+The kubeconfig is cached in the docker volume.  Subsequent
+`cloud-exec` invocations within 50 minutes reuse it (skip both
+`ibmcloud login` and `ibmcloud ks cluster config`); after that the
+session is refreshed inside the IBM IAM token's 1-hour validity
+window.  The `ibmcloud` session and plugin caches live in the same
+volume, so warm containers keep `ibmcloud` authenticated too.
 
 `terraform plan / apply / destroy` continue to work without
 `cloud-exec` — terraform reads `TF_VAR_ibmcloud_api_key` directly

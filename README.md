@@ -201,16 +201,56 @@ necessary overrides applied; it never modifies the original.
 A `Dockerfile` is provided that builds a self-contained Alpine image with
 Terraform, all required providers, the project source, and the helper
 CLIs the modules shell out to (`kubectl`, `helm`, `curl`, `tar`,
-`python3`).  `terraform init` runs during the build, so the image ships
-with `.terraform.lock.hcl` and every provider already cached — no
-registry access is needed at runtime.
+`python3`).
+
+### How the build-time `terraform init` pins everything
+
+The Dockerfile runs `terraform init -backend=false` once during the build
+against the project at `/opt/tf-project`. That single init does three
+things, and the results are baked into the image:
+
+1. **Provider versions are pinned.** `.terraform.lock.hcl` is written
+   alongside the project files with the exact version and checksum for
+   every provider used by the root and sub-modules (`ibm`, `kubernetes`,
+   `helm`, `null`, `http`, …). The lockfile is committed to the repo and
+   shipped inside the image, so every container started from the image
+   resolves to those exact provider builds.
+2. **Provider plugins are pre-fetched.** All provider binaries are
+   downloaded into the shared plugin cache at
+   `/opt/tf-project/.terraform-provider-cache` (set via
+   `TF_PLUGIN_CACHE_DIR`). At runtime no container ever needs to reach
+   `registry.terraform.io` — `terraform init` finds every plugin in the
+   cache and links it into `.terraform/`.
+3. **Local modules are resolved.** Every `module "…"` block in this
+   project points at a relative path under `modules/`, so init records
+   them in `.terraform/modules/modules.json`. The module *source* lives
+   in the image at the commit baked in at build time; rebuilding the
+   image is what advances the module code.
+
+### Why you do not need to `terraform init` again
+
+The entrypoint runs `terraform init -input=false` once on first use of a
+`/work` volume (when `.terraform/` does not yet exist there) so commands
+like `terraform plan` work immediately. That init is offline and fast
+because:
+
+- the lockfile from the image fixes every provider version,
+- the pre-warmed plugin cache satisfies every download, and
+- modules resolve through the symlinked project tree to the same baked-in
+  sources.
+
+After that, repeated `docker run … terraform plan / apply / destroy`
+invocations skip init entirely. You only need to re-run `terraform init`
+yourself if you change `versions.tf`, edit a `required_providers` block,
+or pull a newer image (delete `/work/.terraform/` to force a refresh, or
+just run `terraform init -upgrade`).
 
 ### Build
 
 ```bash
-docker build -t bnk-terraform .
+docker build -t ibmcloud-terraform-bnk-2-3 .
 # Pin a different Terraform version if you like:
-docker build --build-arg TERRAFORM_VERSION=1.9.8 -t bnk-terraform .
+docker build --build-arg TERRAFORM_VERSION=1.9.8 -t ibmcloud-terraform-bnk-2-3 .
 ```
 
 ### State persistence
@@ -262,25 +302,25 @@ container on exit; the volume (and its state) survives.
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform terraform init
+  ibmcloud-terraform-bnk-2-3 terraform init
 
 # terraform plan
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform terraform plan -var-file terraform.tfvars
+  ibmcloud-terraform-bnk-2-3 terraform plan -var-file terraform.tfvars
 
 # terraform apply (interactive — prompts for "yes")
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform terraform apply -var-file terraform.tfvars
+  ibmcloud-terraform-bnk-2-3 terraform apply -var-file terraform.tfvars
 
 # terraform destroy
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform terraform destroy -var-file terraform.tfvars
+  ibmcloud-terraform-bnk-2-3 terraform destroy -var-file terraform.tfvars
 ```
 
 `deploy.sh` works the same way; pass it as the command instead of
@@ -291,13 +331,13 @@ docker run -it --rm \
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform ./deploy.sh
+  ibmcloud-terraform-bnk-2-3 ./deploy.sh
 
 # Non-interactive (auto-approve) — drop -t and feed /dev/null on stdin
 docker run -i --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform ./deploy.sh < /dev/null
+  ibmcloud-terraform-bnk-2-3 ./deploy.sh < /dev/null
 ```
 
 `run_tests.sh` lands its `test-runs/<timestamp>/` tree in the same
@@ -309,19 +349,19 @@ recovery via `--cleanup`:
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform ./run_tests.sh
+  ibmcloud-terraform-bnk-2-3 ./run_tests.sh
 
 # A single scenario, leaving resources up
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform ./run_tests.sh --no-destroy 1
+  ibmcloud-terraform-bnk-2-3 ./run_tests.sh --no-destroy 1
 
 # Recover after a crash — destroy any state still in the volume
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform ./run_tests.sh --cleanup test-runs/20260504_065205
+  ibmcloud-terraform-bnk-2-3 ./run_tests.sh --cleanup test-runs/20260504_065205
 ```
 
 For ad-hoc poking around — copying the example tfvars, viewing logs,
@@ -331,7 +371,7 @@ re-running pieces by hand — drop into a shell:
 docker run -it --rm \
   -v bnk-state:/work \
   -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-  bnk-terraform bash
+  ibmcloud-terraform-bnk-2-3 bash
 ```
 
 Inside the container `/work` is your CWD, every project file is

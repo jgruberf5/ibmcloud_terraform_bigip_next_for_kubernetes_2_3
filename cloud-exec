@@ -67,10 +67,18 @@ CLUSTER="$CLUSTER_OVERRIDE"
 }
 
 # ── Login + kubeconfig (cached in volume) ───────────────────
+# IBM Cloud IAM bearer tokens last ~1h; refresh after 50 min so kubectl
+# never trips a 401 inside the cache window.  A sidecar marker file
+# records which cluster id the cached kubeconfig was fetched for —
+# the kubeconfig YAML stores the human cluster name, not the id, so
+# we cannot reliably grep $CLUSTER against the file itself.
+TOKEN_TTL=3000
+MARKER="$KUBECONFIG.cluster-id"
+
 need_refresh=true
-if [[ -s "$KUBECONFIG" ]] \
-   && (( $(date +%s) - $(stat -c %Y "$KUBECONFIG") < 1800 )) \
-   && grep -q "name: $CLUSTER" "$KUBECONFIG" 2>/dev/null; then
+if [[ -s "$KUBECONFIG" && -f "$MARKER" ]] \
+   && (( $(date +%s) - $(stat -c %Y "$KUBECONFIG") < TOKEN_TTL )) \
+   && [[ "$(cat "$MARKER" 2>/dev/null)" == "$CLUSTER" ]]; then
     need_refresh=false
 fi
 
@@ -93,6 +101,7 @@ if [[ "$need_refresh" == true ]]; then
     }
     cp "$DEFAULT_KUBE" "$KUBECONFIG"
     chmod 600 "$KUBECONFIG"
+    printf '%s' "$CLUSTER" > "$MARKER"
 fi
 
 # ── Hand off ────────────────────────────────────────────────

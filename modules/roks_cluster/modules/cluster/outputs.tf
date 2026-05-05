@@ -97,7 +97,7 @@ output "transit_gateway_global_routing" {
 
 output "transit_gateway_connections" {
   description = "Transit Gateway connection summary"
-  value = var.create_transit_gateway ? {
+  value = var.create_transit_gateway && var.create_cluster ? {
     cluster_vpc = ibm_tg_connection.cluster_vpc_connection[0].name
   } : null
 }

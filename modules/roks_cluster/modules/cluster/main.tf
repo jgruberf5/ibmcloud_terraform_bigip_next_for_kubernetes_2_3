@@ -354,7 +354,7 @@ resource "ibm_tg_gateway" "transit_gateway" {
   timeouts {
     create = "30m"
     update = "30m"
-    delete = "30m"
+    delete = "60m"
   }
 }
 
@@ -369,7 +369,7 @@ resource "ibm_tg_connection" "cluster_vpc_connection" {
   timeouts {
     create = "30m"
     update = "30m"
-    delete = "30m"
+    delete = "60m"
   }
 }
 

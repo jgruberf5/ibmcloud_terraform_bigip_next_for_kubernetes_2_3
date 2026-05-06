@@ -119,7 +119,7 @@ deploy_bnk = true
 far_repo_url = "repo.f5.com"
 
 # Version of the f5-bigip-k8s-manifest chart.
-f5_bigip_k8s_manifest_version = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+f5_bigip_k8s_manifest_version = "2.3.0-3.2598.3-0.0.170"
 
 # Filename of the FAR auth key archive in the COS bucket.
 f5_cne_far_auth_file = "f5-far-auth-key.tgz"
@@ -135,8 +135,8 @@ flo_utils_namespace = "f5-utils"
 
 # BIG-IP credentials for the CIS controller (leave blank if not using CIS).
 bigip_username = "admin"
-bigip_password = ""
-bigip_url      = ""
+bigip_password = "admin"
+bigip_url      = "https://192.168.1.245"
 
 
 # --- FLO output overrides (ws3 → ws4) ---

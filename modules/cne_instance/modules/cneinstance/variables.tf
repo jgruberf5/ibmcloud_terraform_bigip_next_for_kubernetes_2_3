@@ -28,7 +28,7 @@ variable "cneinstance_spec" {
 variable "f5_bigip_k8s_manifest_version" {
   description = "F5 BIG-IP Kubernetes manifest version"
   type        = string
-  default     = "2.2.1-3.2226.0-0.0.483"
+  default     = "2.3.0-3.2598.3-0.0.170"
 }
 
 variable "cneinstance_gateway_api" {

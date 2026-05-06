@@ -50,7 +50,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BASE_TFVARS="$SCRIPT_DIR/terraform.tfvars"
+# WORK_DIR is the user's writable workspace — where their
+# terraform.tfvars lives and where test-runs/ should land. When this
+# script is invoked via `bnk infra test`, SCRIPT_DIR is /opt/tf-project
+# (in the runner image, read-only) and the cwd is /work (host
+# bind-mount). When invoked directly from a checkout, both match.
+WORK_DIR="$(pwd)"
+BASE_TFVARS="$WORK_DIR/terraform.tfvars"
 RUN_TS=$(date -u +%Y%m%d_%H%M%S)
 DIVIDER='══════════════════════════════════════════════════════════════'
 
@@ -87,7 +93,7 @@ done
 SELECTED_IDS=("${DEDUPED[@]}"); unset _SEEN _x DEDUPED
 
 # ── Run directory ────────────────────────────────────────────
-[[ -z "$RUN_DIR" ]] && RUN_DIR="$SCRIPT_DIR/test-runs/$RUN_TS"
+[[ -z "$RUN_DIR" ]] && RUN_DIR="$WORK_DIR/test-runs/$RUN_TS"
 mkdir -p "$RUN_DIR"
 SUMMARY_LOG="$RUN_DIR/summary.log"
 

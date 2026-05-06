@@ -717,7 +717,7 @@ bnk infra <subcommand>
   apply [--auto]        terraform apply (--auto adds -auto-approve)
   destroy               terraform destroy
   output [name]         terraform output
-  test [args...]        ./run_tests.sh inside container
+  test [args...]        run the 4-scenario test harness (writes to ./test-runs/)
   reset                 remove tfstate, .terraform, and auth caches in cwd
 EOF
             return 0 ;;
@@ -746,7 +746,7 @@ EOF
             ;;
         destroy) tf destroy "$STATE" "$VARFILE" "$@" ;;
         output)  tf output  "$STATE" "$@" ;;
-        test)    docker_run ./run_tests.sh "$@" ;;
+        test)    docker_run /opt/tf-project/run_tests.sh "$@" ;;
         *) echo "bnk infra: unknown subcommand '$sub'" >&2; exit 1 ;;
     esac
 }

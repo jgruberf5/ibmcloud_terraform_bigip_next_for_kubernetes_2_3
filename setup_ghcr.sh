@@ -67,7 +67,13 @@ ok "authenticated as $authed_user"
 # Required scopes for what this script does. token may be classic PAT or
 # fine-grained — gh maintains either, we only need the access at run time.
 required_scopes="repo workflow write:packages"
+# Older `gh` (pre-2.6) doesn't print "Token scopes:" in `gh auth status`,
+# so fall back to the X-OAuth-Scopes response header from any API call.
 have_scopes=$(gh auth status 2>&1 | grep -oE "Token scopes: .*" || true)
+if [[ -z "$have_scopes" ]]; then
+    have_scopes=$(gh api -i /user 2>/dev/null \
+        | grep -i '^X-Oauth-Scopes:' || true)
+fi
 for s in $required_scopes; do
     if [[ "$have_scopes" != *"'${s}'"* ]] && [[ "$have_scopes" != *"$s"* ]]; then
         warn "token may be missing scope: $s"

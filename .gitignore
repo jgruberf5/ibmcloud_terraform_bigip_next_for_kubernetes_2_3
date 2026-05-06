@@ -9,6 +9,11 @@ terraform.tfstate.backup
 .terraform.lock.hcl
 .terraform-provider-cache/
 
+# Environment files
+.env
+.env.*
+make_dot_envs.sh
+
 # run_tests.sh output trees
 test-runs/
 test-reports/

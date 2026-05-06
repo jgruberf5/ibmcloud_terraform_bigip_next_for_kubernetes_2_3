@@ -16,7 +16,7 @@ roks_cluster_name_or_id = "my-openshift-cluster"
 flo_namespace            = "f5-bnk"
 flo_utils_namespace      = "f5-utils"
 flo_cluster_issuer_name  = "sample-issuer"
-flo_f5_bigip_k8s_manifest_version = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+flo_f5_bigip_k8s_manifest_version = "2.3.0-3.2598.3-0.0.170"
 flo_ibm_trusted_profile_id = ""
 
 # ============================================================

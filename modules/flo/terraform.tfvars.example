@@ -15,7 +15,7 @@ roks_cluster_name_or_id = "my-openshift-cluster"
 # FAR / Registry
 # ============================================================
 far_repo_url                  = "repo.f5.com"
-f5_bigip_k8s_manifest_version = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+f5_bigip_k8s_manifest_version = "2.3.0-3.2598.3-0.0.170"
 
 # ============================================================
 # COS Bucket — FAR auth key and JWT fetched from IBM COS

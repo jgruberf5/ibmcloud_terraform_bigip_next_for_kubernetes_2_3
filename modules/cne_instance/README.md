@@ -25,7 +25,7 @@ These variables pass FLO deployment outputs into the CNEInstance configuration.
 | -------- | ----------- | -------- | ------- |
 | `flo_namespace` | Namespace where FLO is deployed | Optional | `f5-bnk` (default) |
 | `flo_utils_namespace` | Namespace for F5 utility components | Optional | `f5-utils` (default) |
-| `flo_f5_bigip_k8s_manifest_version` | Version of f5-bigip-k8s-manifest chart | Optional | `2.3.0-bnpp-ehf-2-3.2598.3-0.0.17` (default) |
+| `flo_f5_bigip_k8s_manifest_version` | Version of f5-bigip-k8s-manifest chart | Optional | `2.3.0-3.2598.3-0.0.170` (default) |
 | `flo_trusted_profile_id` | IBM IAM Trusted Profile ID for provisioning VPC routes | Optional | |
 | `flo_cluster_issuer_name` | mTLS certificate issuer name | Optional | `sample-issuer` |
 | `flo_far_repo_url` | FAR Repository URL for Docker and Helm registry | Optional | `repo.f5.com` (default) |
@@ -140,7 +140,7 @@ roks_cluster_name_or_id = "my-openshift-cluster"
 # FLO Output Variables
 flo_namespace                     = "f5-bnk"
 flo_utils_namespace               = "f5-utils"
-flo_f5_bigip_k8s_manifest_version = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+flo_f5_bigip_k8s_manifest_version = "2.3.0-3.2598.3-0.0.170"
 flo_trusted_profile_id            = ""
 flo_cluster_issuer_name           = ""
 flo_far_repo_url                  = "repo.f5.com"

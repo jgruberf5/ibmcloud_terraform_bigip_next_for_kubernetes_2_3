@@ -34,7 +34,7 @@ Deploying BIG-IP Next for Kubernetes requires access to the F5 Artifact Reposito
 | Variable | Description | Required | Example |
 | -------- | ----------- | -------- | ------- |
 | `far_repo_url` | FAR Repository URL for Docker and Helm registry | REQUIRED with default defined | repo.f5.com (default) |
-| `f5_bigip_k8s_manifest_version` | Version of f5-bigip-k8s-manifest chart to install | REQUIRED with default defined | 2.3.0-bnpp-ehf-2-3.2598.3-0.0.17 (default) |
+| `f5_bigip_k8s_manifest_version` | Version of f5-bigip-k8s-manifest chart to install | REQUIRED with default defined | 2.3.0-3.2598.3-0.0.170 (default) |
 | `license_mode` | License operation mode (connected or disconnected) | REQUIRED with default defined | connected (default) |
 
 #### IBM COS for F5 Artifact Repository and License JWT Token
@@ -240,7 +240,7 @@ roks_cluster_name_or_id = "my-openshift-cluster"
 
 # FAR Registry
 far_repo_url                  = "repo.f5.com"
-f5_bigip_k8s_manifest_version = "2.3.0-bnpp-ehf-2-3.2598.3-0.0.17"
+f5_bigip_k8s_manifest_version = "2.3.0-3.2598.3-0.0.170"
 
 # COS Bucket — FAR auth key and JWT fetched from IBM COS
 ibmcloud_cos_bucket_region    = "us-south"

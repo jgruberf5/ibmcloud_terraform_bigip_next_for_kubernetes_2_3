@@ -136,9 +136,9 @@ Workloads
   cert-manager     3/3
 ```
 
-Auth happens once at the top via `cloud-exec`, so the IBM Cloud + cluster
-+ kubectl calls share a single 50-minute cached login. If cluster auth
-fails (e.g. pre-apply), the IBM Cloud and Terraform sections still render.
+Auth happens once at the top, so the IBM Cloud, cluster, and kubectl
+calls share a single 50-minute cached login. If cluster auth fails
+(e.g. pre-apply), the IBM Cloud and Terraform sections still render.
 
 ### `bnk plan` summary
 
@@ -301,38 +301,36 @@ Wipe it with `bnk infra reset` — irreversible, prompts for confirmation.
 `bnk` bind-mounts `./terraform.tfvars` into the container as `:ro`. The
 entrypoint extracts `ibmcloud_api_key` and `ibmcloud_cluster_region` and
 exports them as `IBMCLOUD_API_KEY` / `IBMCLOUD_REGION` so every shell
-inside the container — including `cloud-exec`, plain `bnk shell`, and
-`bnk infra test` — picks up auth automatically.
+and one-shot command inside the container — `bnk shell`, `bnk kubectl …`,
+`bnk infra test`, and friends — picks up auth automatically.
 
 You can also set `TF_VAR_ibmcloud_api_key` etc. in your shell to
 override; the entrypoint prefers env vars when set.
 
 ---
 
-## `cloud-exec` — the in-container auth helper
+## How `bnk` resolves auth and the cluster
 
-`cloud-exec` lives inside the image at `/usr/local/bin/cloud-exec` and is
-what `bnk shell`, `bnk kubectl …`, `bnk oc …`, `bnk ibmcloud …`, and
-`bnk status` call internally. You don't usually invoke it directly — it
-runs `ibmcloud login`, fetches an admin kubeconfig with `ibmcloud ks
-cluster config --admin`, caches both in the volume, and either runs your
-command or drops you into an interactive bash with the cluster name in
-the prompt.
+When you run `bnk shell`, `bnk kubectl …`, `bnk oc …`, `bnk ibmcloud …`,
+or `bnk status`, bnk transparently runs `ibmcloud login`, fetches an
+admin kubeconfig with `ibmcloud ks cluster config --admin`, and caches
+both in the docker volume before handing off to your command (or
+dropping you into an interactive bash with the cluster name in the
+prompt).
 
-It resolves the cluster from this order, stopping at the first hit:
+Each input is resolved in priority order, stopping at the first hit:
 
-| Value | Sources (in order) |
-|-------|-------------------|
-| API key | `IBMCLOUD_API_KEY`, `TF_VAR_ibmcloud_api_key`, `ibmcloud_api_key` in tfvars |
-| Region  | `IBMCLOUD_REGION`, `TF_VAR_ibmcloud_cluster_region`, `ibmcloud_cluster_region` in tfvars, fallback `ca-tor` |
-| Cluster | `-c <name>`, `terraform output -raw roks_cluster_id`, `roks_cluster_id_or_name` in tfvars, `openshift_cluster_name` in tfvars |
+| Value   | Sources (in order) |
+|---------|-------------------|
+| API key | `IBMCLOUD_API_KEY` env, `TF_VAR_ibmcloud_api_key`, `ibmcloud_api_key` in tfvars |
+| Region  | `IBMCLOUD_REGION` env, `TF_VAR_ibmcloud_cluster_region`, `ibmcloud_cluster_region` in tfvars, fallback `ca-tor` |
+| Cluster | `bnk shell -c <name>`, `terraform output -raw roks_cluster_id`, `roks_cluster_id_or_name` in tfvars, `openshift_cluster_name` in tfvars |
 
-The kubeconfig is cached in the docker volume. Subsequent `cloud-exec`
-invocations within 50 minutes reuse it (skip both `ibmcloud login` and
-`ibmcloud ks cluster config`); after that the session is refreshed
-inside the IBM IAM token's 1-hour validity window. The `ibmcloud`
-session and plugin caches live in the same volume, so warm containers
-stay authenticated.
+The kubeconfig is cached in the `bnk-state` volume. Calls within
+50 minutes reuse it (skip both `ibmcloud login` and `ibmcloud ks
+cluster config`); after that the session is refreshed inside the IBM
+IAM token's 1-hour validity window. The `ibmcloud` session and plugin
+caches live in the same volume, so warm containers stay authenticated.
 
 ---
 
@@ -594,7 +592,7 @@ When changing the image name, owner, or wrapper version:
 ├── terraform.tfvars.example  # template for your terraform.tfvars
 ├── Dockerfile                # builds the runner image
 ├── docker-entrypoint.sh      # ENTRYPOINT: symlinks, credential exports, ibmcloud state
-├── cloud-exec                # in-image helper: ibmcloud/kubectl/oc pre-authenticated
+├── cloud-exec                # internal helper baked into the image (called by bnk shell/kubectl/oc/ibmcloud)
 ├── run_tests.sh              # 4-scenario init/plan/apply/destroy test harness
 ├── remove_cert_manager_crds.sh   # helper: delete cert-manager CRDs (helm uninstall doesn't)
 ├── .dockerignore

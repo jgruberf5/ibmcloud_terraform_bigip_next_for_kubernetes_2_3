@@ -43,10 +43,12 @@ This copies bnk out of the image to `/dest/bnk`. Same end state as the curl inst
 
 ```bash
 rm ~/.local/bin/bnk
-# Optionally also remove the cached state and image:
-docker volume rm bnk-state
+# Optionally also remove the runner image:
 docker image rm ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3
 ```
+
+Per-project state lives in each project's directory — to wipe a
+project, `cd` into it and run `bnk infra reset`.
 
 ---
 
@@ -105,7 +107,7 @@ for the equivalent group form. Every infra subcommand requires
 
 Tiered preflight; prints `✓` / `✗` / `!` per check with remediation hints:
 
-1. **Host** — docker present, daemon reachable, image age, state volume present
+1. **Host** — docker present, daemon reachable, image age, cwd writable
 2. **Project** — tfvars present, `ibmcloud_api_key` not a placeholder, region set
 3. **Container probes** (one `docker run`) — live `ibmcloud login` against the configured region, `terraform validate`
 
@@ -161,10 +163,12 @@ ignored.
 
 ### `bnk infra reset`
 
-Wipes the docker state volume (terraform state, kubeconfig, ibmcloud
-session). Refuses to run unless you type the volume name verbatim. **If a
-cluster is provisioned, run `bnk destroy` first** — otherwise the cluster
-keeps running but you lose the ability to manage it from here.
+Removes the bnk-created files in the current directory:
+`terraform.tfstate*`, `.terraform/`, `.terraform.lock.hcl`, `.kube/`,
+`.bluemix/`. Leaves `terraform.tfvars` alone. Prompts for confirmation
+(type `reset`). **If a cluster is provisioned, run `bnk destroy`
+first** — otherwise the cluster keeps running but you lose the ability
+to manage it from here.
 
 ### Tab completion
 
@@ -183,7 +187,6 @@ Completes top-level commands, `infra`/`cluster` subcommands, and
 | Variable | Default                          | Effect |
 |----------|----------------------------------|--------|
 | `IMAGE`  | `ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest` | Image bnk runs (override to use a local build or a different tag) |
-| `VOLUME` | `bnk-state`                      | Docker volume holding state + caches |
 
 ---
 
@@ -263,45 +266,57 @@ docker build -t my-bnk-dev .
 IMAGE=my-bnk-dev bnk plan
 ```
 
-### Why no runtime `terraform init`
+### Why `terraform init` is fast
 
 The build runs `terraform init -backend=false` once against the project
 at `/opt/tf-project`, which:
 
-1. **Pins provider versions** in `.terraform.lock.hcl` (committed to the
-   repo and shipped in the image).
+1. **Pins provider versions** in `.terraform.lock.hcl` (shipped in the image).
 2. **Pre-fetches every provider** into the shared plugin cache at
    `/opt/tf-project/.terraform-provider-cache` (set via
-   `TF_PLUGIN_CACHE_DIR`). At runtime, `terraform init` is offline.
-3. **Resolves local modules** through the symlinked tree.
+   `TF_PLUGIN_CACHE_DIR`). At runtime, `terraform init` reads from the
+   cache — no registry round-trip.
+3. **Resolves local modules** in-place from the image's project tree.
 
-The entrypoint runs `terraform init -input=false` once on first use of a
-new `/work` volume, then plan/apply/destroy skip init entirely. Re-init
-only when you change `versions.tf` or pull a newer image (delete
-`/work/.terraform/` or run `bnk infra init`).
+`bnk infra init` writes `.terraform/` to the cwd (via `TF_DATA_DIR`)
+and uses the pre-warmed plugin cache, so it completes in seconds and
+needs no network. Re-init only when you change `versions.tf` or pull a
+newer image (delete `./.terraform/` or run `bnk infra init`).
 
-### State persistence — the `bnk-state` volume
+### State persistence — the current directory
 
-`bnk` mounts a docker volume named `bnk-state` at `/work`. Everything
-mutable lives there; the rest of the project tree is symlinked in
-read-only from the image:
+`bnk` bind-mounts your current directory at `/work` inside the
+container, runs as the host UID/GID, and points terraform's data
+directory and HOME at `/work` too. Every mutable artifact lives in
+`$(pwd)` on the host:
 
-| Path in volume                                   | Contents |
+| Path in cwd                                      | Contents |
 |--------------------------------------------------|----------|
+| `terraform.tfvars`                               | your inputs (you create this with `bnk init`) |
 | `terraform.tfstate` / `terraform.tfstate.backup` | root-module state |
 | `.terraform/`                                    | provider links and module cache |
+| `.terraform.lock.hcl`                            | provider checksums |
 | `.kube/config` (+ `.cluster-id`)                 | cached kubeconfig and the cluster id it belongs to |
 | `.bluemix/`                                      | `ibmcloud` session token and installed plugins |
 | `test-runs/<timestamp>/`                         | per-run logs and isolated state from `bnk infra test` |
 
-Wipe it with `bnk infra reset` — irreversible, prompts for confirmation.
+Run `bnk` from a per-project directory; don't share one cwd across
+unrelated deployments. Each directory is its own state.
+
+Wipe a project's state with `bnk infra reset` (prompts for confirmation;
+removes the files above but leaves `terraform.tfvars` intact).
+
+The Terraform project itself (every `.tf` file, the modules, and the
+pre-warmed provider cache) lives at `/opt/tf-project` inside the image
+and is read-only — `bnk` reaches into it via
+`terraform -chdir=/opt/tf-project`.
 
 ### Credentials and inputs
 
-`bnk` bind-mounts `./terraform.tfvars` into the container as `:ro`. The
-entrypoint extracts `ibmcloud_api_key` and `ibmcloud_cluster_region` and
-exports them as `IBMCLOUD_API_KEY` / `IBMCLOUD_REGION` so every shell
-and one-shot command inside the container — `bnk shell`, `bnk kubectl …`,
+`bnk` reads `terraform.tfvars` from the cwd. The entrypoint extracts
+`ibmcloud_api_key` and `ibmcloud_cluster_region` and exports them as
+`IBMCLOUD_API_KEY` / `IBMCLOUD_REGION` so every shell and one-shot
+command inside the container — `bnk shell`, `bnk kubectl …`,
 `bnk infra test`, and friends — picks up auth automatically.
 
 You can also set `TF_VAR_ibmcloud_api_key` etc. in your shell to
@@ -326,7 +341,7 @@ Each input is resolved in priority order, stopping at the first hit:
 | Region  | `IBMCLOUD_REGION` env, `TF_VAR_ibmcloud_cluster_region`, `ibmcloud_cluster_region` in tfvars, fallback `ca-tor` |
 | Cluster | `bnk shell -c <name>`, `terraform output -raw roks_cluster_id`, `roks_cluster_id_or_name` in tfvars, `openshift_cluster_name` in tfvars |
 
-The kubeconfig is cached in the `bnk-state` volume. Calls within
+The kubeconfig is cached at `./.kube/config` in the cwd. Calls within
 50 minutes reuse it (skip both `ibmcloud login` and `ibmcloud ks
 cluster config`); after that the session is refreshed inside the IBM
 IAM token's 1-hour validity window. The `ibmcloud` session and plugin

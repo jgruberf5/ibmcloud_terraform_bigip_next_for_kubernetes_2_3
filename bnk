@@ -29,13 +29,23 @@
 #   source <(bnk completion zsh)           # zsh
 #
 # Env overrides:
-#   IMAGE   image ref    (default: ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest)
-#   VOLUME  state volume (default: bnk-state)
+#   IMAGE   image ref (default: ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest)
+#
+# State model:
+#   The current directory is bind-mounted at /work inside the container.
+#   terraform.tfvars (input) and terraform.tfstate, .terraform/, .kube/,
+#   .bluemix/, test-runs/ (outputs and caches) all live in $(pwd) on the
+#   host. Run bnk from a per-project directory; don't share one cwd
+#   across unrelated deployments.
 # ============================================================
 set -euo pipefail
 
 IMAGE="${IMAGE:-ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest}"
-VOLUME="${VOLUME:-bnk-state}"
+
+# Where the Terraform project lives inside the image. terraform commands
+# use -chdir=$TF_PROJECT_DIR so they read .tf files from here, while
+# state, var-file, and TF_DATA_DIR all point at /work (host cwd).
+TF_PROJECT_DIR=/opt/tf-project
 
 # ── tty / color helpers ─────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -56,13 +66,9 @@ section() { printf "\n%s%s%s\n"     "$C_BOLD" "$*" "$C_OFF"; }
 need_tfvars() {
     [[ -f "$(pwd)/terraform.tfvars" ]] || {
         echo "bnk: terraform.tfvars not found in $(pwd)" >&2
-        echo "  cp terraform.tfvars.example terraform.tfvars && \$EDITOR terraform.tfvars" >&2
+        echo "  run: bnk init" >&2
         exit 1
     }
-}
-ensure_volume() {
-    docker volume inspect "$VOLUME" >/dev/null 2>&1 \
-        || docker volume create "$VOLUME" >/dev/null
 }
 # Pull the runner image once, lazily, so a freshly-installed bnk works
 # without a separate `docker pull`. Stays quiet on subsequent runs.
@@ -71,20 +77,39 @@ ensure_image() {
     printf "bnk: image %s not found locally — pulling...\n" "$IMAGE" >&2
     docker pull "$IMAGE" >&2
 }
+
+# Common docker run args:
+#   --user $UID:$GID       so files written to /work land owned by the
+#                          host user (without this, root-in-container
+#                          writes root-owned files in the host cwd)
+#   -v $(pwd):/work        the host cwd IS /work — terraform.tfvars,
+#                          tfstate, .terraform/, .kube/, .bluemix/ all
+#                          live here on the host
+#   -e HOME=/work          ibmcloud (.bluemix) and kubectl (.kube)
+#                          drop their caches under /work
+#   -e TF_DATA_DIR=...     keep .terraform/ in /work, not /opt/tf-project
+docker_args=(
+    --user "$(id -u):$(id -g)"
+    -v "$(pwd):/work"
+    -e HOME=/work
+    -e TF_DATA_DIR=/work/.terraform
+)
 docker_run() {
     ensure_image
-    docker run -it --rm \
-        -v "$VOLUME:/work" \
-        -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-        "$IMAGE" "$@"
+    docker run -it --rm "${docker_args[@]}" "$IMAGE" "$@"
 }
 # Non-interactive variant for probes — no -it, no stdin attached.
 docker_run_quiet() {
     ensure_image
-    docker run --rm \
-        -v "$VOLUME:/work" \
-        -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
-        "$IMAGE" "$@"
+    docker run --rm "${docker_args[@]}" "$IMAGE" "$@"
+}
+
+# All terraform invocations from bnk go through this so the -chdir,
+# -state, -var-file, and TF_DATA_DIR knobs stay consistent. Pass the
+# subcommand and any extra args; this prepends -chdir.
+tf() {
+    local sub=$1; shift
+    docker_run terraform -chdir="$TF_PROJECT_DIR" "$sub" "$@"
 }
 
 read_tfvar() {
@@ -169,9 +194,13 @@ cmd_uninstall() {
 
 This will:
   1. Remove bnk from $self
-  2. Optionally remove the docker volume '$VOLUME'
-       (terraform state, kubeconfig, ibmcloud session — irreversible)
-  3. Optionally remove the docker image '$IMAGE'
+  2. Optionally remove the docker image '$IMAGE'
+  3. Optionally remove the legacy 'bnk-state' docker volume (only
+     present if you used a pre-cwd-bind version of bnk)
+
+Per-project state lives in each project's directory now, not in a
+shared docker volume. To wipe a project's state, run 'bnk infra reset'
+inside that project's directory first.
 
 EOF
 
@@ -180,13 +209,12 @@ EOF
     read -r ans
     [[ "$ans" =~ ^[Yy] ]] || { echo "aborted."; return 1; }
 
-    printf "Also remove docker volume %s? [y/N]: " "$VOLUME"
-    read -r ans
-    if [[ "$ans" =~ ^[Yy] ]]; then
-        if docker volume rm "$VOLUME" 2>/dev/null; then
-            ok "removed volume $VOLUME"
-        else
-            warn "volume $VOLUME not present"
+    if docker volume inspect bnk-state >/dev/null 2>&1; then
+        printf "Also remove the legacy 'bnk-state' docker volume? [y/N]: "
+        read -r ans
+        if [[ "$ans" =~ ^[Yy] ]]; then
+            docker volume rm bnk-state >/dev/null && ok "removed volume bnk-state" \
+                || warn "could not remove volume bnk-state"
         fi
     fi
 
@@ -360,10 +388,12 @@ cmd_doctor() {
         hint "docker build -t $IMAGE ."
         failures=$((failures+1))
     fi
-    if docker volume inspect "$VOLUME" >/dev/null 2>&1; then
-        ok "state volume $VOLUME present"
+    if [[ -w . ]]; then
+        ok "current directory writable ($(pwd))"
     else
-        warn "state volume $VOLUME not yet created (will be on first run)"
+        fail "current directory not writable: $(pwd)"
+        hint "bnk uses the cwd as its workspace — pick a writable dir"
+        failures=$((failures+1))
     fi
 
     section "Project files"
@@ -371,7 +401,7 @@ cmd_doctor() {
         ok "terraform.tfvars present"
     else
         fail "terraform.tfvars missing"
-        hint "cp terraform.tfvars.example terraform.tfvars"
+        hint "run: bnk init"
         failures=$((failures+1))
         printf "\n%s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
         return 1
@@ -397,7 +427,6 @@ cmd_doctor() {
         printf "\n%s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
         return 1
     fi
-    ensure_volume
     # Single container invocation runs every in-container check at once.
     # Output lines are key=rc pairs the host parses; stderr is suppressed
     # because login chatter ("API endpoint: ..." etc.) is not useful here.
@@ -406,7 +435,7 @@ cmd_doctor() {
         set +e
         ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION" >/dev/null 2>&1
         echo "IBM_LOGIN=$?"
-        terraform -chdir=/work validate -no-color >/dev/null 2>&1
+        terraform -chdir=/opt/tf-project validate -no-color >/dev/null 2>&1
         echo "TF_VALIDATE=$?"
     ' 2>/dev/null) || true
 
@@ -420,7 +449,7 @@ cmd_doctor() {
     if grep -q '^TF_VALIDATE=0$' <<<"$probe"; then
         ok "terraform validate passes"
     else
-        warn "terraform validate failed (run 'bnk infra init' if this is a fresh volume)"
+        warn "terraform validate failed"
     fi
 
     section "Summary"
@@ -440,7 +469,7 @@ cmd_doctor() {
 # resource changes by top-level module. The user sees the normal
 # coloured plan output live; the summary is appended after.
 cmd_plan() {
-    need_tfvars; ensure_volume
+    need_tfvars
     docker_run bash -c '
         set -e
 
@@ -491,8 +520,11 @@ cmd_plan() {
         }
 
         plan_file=/work/.bnk-plan.tfplan
-        terraform plan -var-file=terraform.tfvars -out="$plan_file" "$@"
-        terraform show -no-color "$plan_file" | summarize
+        terraform -chdir=/opt/tf-project plan \
+            -state=/work/terraform.tfstate \
+            -var-file=/work/terraform.tfvars \
+            -out="$plan_file" "$@"
+        terraform -chdir=/opt/tf-project show -no-color "$plan_file" | summarize
         rm -f "$plan_file"
     ' -- "$@"
 }
@@ -516,7 +548,7 @@ cmd_status() {
             *) echo "bnk status: unknown option '$1'" >&2; return 1 ;;
         esac
     done
-    need_tfvars; ensure_volume
+    need_tfvars
     docker_run bash -c '
         set +e
 
@@ -563,7 +595,8 @@ cmd_status() {
 
         section "Terraform"
         if [[ -f /work/terraform.tfstate ]]; then
-            N=$(cd /work && terraform state list 2>/dev/null | wc -l)
+            N=$(terraform -chdir=/opt/tf-project state list \
+                    -state=/work/terraform.tfstate 2>/dev/null | wc -l)
             MTIME=$(stat -c %Y /work/terraform.tfstate)
             AGE_MIN=$(( ( $(date +%s) - MTIME ) / 60 ))
             if   (( AGE_MIN <   60 )); then AGE="${AGE_MIN}m"
@@ -573,9 +606,11 @@ cmd_status() {
             kv state "$N resources, ${AGE} since last write"
             if [[ "$CHECK_DRIFT" == true ]]; then
                 printf "  %schecking drift...%s\r" "$DIM" "$OFF" >&2
-                ( cd /work && terraform plan -refresh-only -detailed-exitcode \
+                terraform -chdir=/opt/tf-project plan -refresh-only -detailed-exitcode \
                     -input=false -no-color -lock=false \
-                    -var-file=terraform.tfvars ) >/dev/null 2>&1
+                    -state=/work/terraform.tfstate \
+                    -var-file=/work/terraform.tfvars \
+                    >/dev/null 2>&1
                 DRIFT_RC=$?
                 printf "                            \r" >&2
                 case $DRIFT_RC in
@@ -683,14 +718,20 @@ bnk infra <subcommand>
   destroy               terraform destroy
   output [name]         terraform output
   test [args...]        ./run_tests.sh inside container
-  reset                 wipe the docker state volume (irreversible)
+  reset                 remove tfstate, .terraform, and auth caches in cwd
 EOF
             return 0 ;;
         reset) cmd_reset; return $? ;;
     esac
-    need_tfvars; ensure_volume
+    need_tfvars
+    # Standard flags every plan/apply/destroy needs: read state from
+    # /work/terraform.tfstate (host cwd), read inputs from
+    # /work/terraform.tfvars (host cwd). -chdir points terraform at the
+    # in-image project tree.
+    local STATE=-state=/work/terraform.tfstate
+    local VARFILE=-var-file=/work/terraform.tfvars
     case "$sub" in
-        init)    docker_run terraform init "$@" ;;
+        init)    tf init "$@" ;;
         plan)    cmd_plan "$@" ;;
         apply)
             # --auto is a bnk-only flag; everything else passes through.
@@ -701,47 +742,61 @@ EOF
                 else rest+=("$a")
                 fi
             done
-            docker_run terraform apply -var-file=terraform.tfvars \
-                "${auto[@]}" "${rest[@]}"
+            tf apply "$STATE" "$VARFILE" "${auto[@]}" "${rest[@]}"
             ;;
-        destroy) docker_run terraform destroy -var-file=terraform.tfvars "$@" ;;
-        output)  docker_run terraform output "$@" ;;
+        destroy) tf destroy "$STATE" "$VARFILE" "$@" ;;
+        output)  tf output  "$STATE" "$@" ;;
         test)    docker_run ./run_tests.sh "$@" ;;
         *) echo "bnk infra: unknown subcommand '$sub'" >&2; exit 1 ;;
     esac
 }
 
 # ── reset ───────────────────────────────────────────────────
-# Nukes the docker volume that holds tfstate, .terraform/, the
-# kubeconfig, and the ibmcloud session. Host-side operation —
-# no need_tfvars / ensure_volume / docker_run.
+# Removes the bnk-created files in the current directory:
+# terraform.tfstate*, .terraform/, .kube/, .bluemix/. Leaves
+# terraform.tfvars alone (user-edited input). Host-side operation.
 cmd_reset() {
-    if ! docker volume inspect "$VOLUME" >/dev/null 2>&1; then
-        echo "bnk infra reset: volume '$VOLUME' does not exist — nothing to do."
+    local targets=(
+        terraform.tfstate
+        terraform.tfstate.backup
+        .terraform
+        .terraform.lock.hcl
+        .kube
+        .bluemix
+    )
+    local present=()
+    for t in "${targets[@]}"; do
+        [[ -e "$t" ]] && present+=("$t")
+    done
+    if (( ${#present[@]} == 0 )); then
+        echo "bnk infra reset: nothing to remove in $(pwd)."
         return 0
     fi
     cat <<EOF
 
-This will permanently delete the docker volume '$VOLUME', which holds:
+This will permanently delete the following from $(pwd):
 
-  - terraform.tfstate (cluster + VPC + transit gateway records)
-  - .terraform/ provider cache and lock file
-  - .kube/config (kubeconfig)
-  - .bluemix/ (ibmcloud session + plugins)
+EOF
+    for t in "${present[@]}"; do
+        printf "  %s\n" "$t"
+    done
+    cat <<EOF
+
+terraform.tfvars is left alone.
 
 If you have a live cluster provisioned by this state, run 'bnk destroy'
 first — otherwise the cluster will keep running but you will lose the
 ability to manage it from here.
 
 EOF
-    printf "Type the volume name to confirm (%s): " "$VOLUME"
+    printf "Type 'reset' to confirm: "
     local ans; read -r ans
-    if [[ "$ans" != "$VOLUME" ]]; then
+    if [[ "$ans" != "reset" ]]; then
         echo "aborted."
         return 1
     fi
-    docker volume rm "$VOLUME" >/dev/null
-    ok "volume $VOLUME removed"
+    rm -rf "${present[@]}"
+    ok "removed: ${present[*]}"
 }
 
 # ── cluster ─────────────────────────────────────────────────
@@ -758,7 +813,7 @@ bnk cluster <subcommand>
 EOF
             return 0 ;;
     esac
-    need_tfvars; ensure_volume
+    need_tfvars
     case "$sub" in
         shell)               docker_run cloud-exec "$@" ;;
         kubectl|oc|ibmcloud) docker_run cloud-exec "$sub" "$@" ;;
@@ -793,7 +848,7 @@ case "$CMD" in
     kubectl|oc|ibmcloud)  cmd_cluster "$CMD" "$@" ;;
     shell)                cmd_cluster shell "$@" ;;
 
-    exec)                 need_tfvars; ensure_volume; docker_run "$@" ;;
+    exec)                 need_tfvars; docker_run "$@" ;;
     completion)           cmd_completion "$@" ;;
 
     -h|--help|help)

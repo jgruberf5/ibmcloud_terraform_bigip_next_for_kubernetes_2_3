@@ -104,7 +104,9 @@ RUN mkdir -p "${TF_PLUGIN_CACHE_DIR}" \
     && chmod +x ${PROJECT_DIR}/run_tests.sh \
                  ${PROJECT_DIR}/docker-entrypoint.sh \
                  ${PROJECT_DIR}/cloud-exec \
-    && ln -sf ${PROJECT_DIR}/cloud-exec /usr/local/bin/cloud-exec
+                 ${PROJECT_DIR}/bnk \
+    && ln -sf ${PROJECT_DIR}/cloud-exec /usr/local/bin/cloud-exec \
+    && ln -sf ${PROJECT_DIR}/bnk        /usr/local/bin/bnk
 
 # Mutable workdir backed by a Docker volume at runtime.
 WORKDIR ${WORK_DIR}

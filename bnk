@@ -9,6 +9,8 @@
 #
 # Common:
 #   bnk init                     interactive tfvars wizard
+#   bnk install                  copy bnk to /dest (run inside the image)
+#   bnk uninstall                remove bnk (and optionally state/image)
 #   bnk doctor                   preflight: docker, image, tfvars, IBM Cloud auth
 #   bnk status [--drift]         one-screen: auth, tfstate, cluster, workloads
 #   bnk plan                     terraform plan with module-grouped summary
@@ -89,12 +91,126 @@ read_tfvar() {
     awk -F'"' "/^[[:space:]]*$1[[:space:]]*=/{print \$2; exit}" terraform.tfvars
 }
 
+# Are we running INSIDE the runner image? (vs. on the host)
+# /opt/tf-project is created at build time and never exists on a host
+# install — safe distinguisher.
+is_in_container() {
+    [[ -f /opt/tf-project/bnk && -f /opt/tf-project/docker-entrypoint.sh ]]
+}
+
+# ── install / uninstall ─────────────────────────────────────
+# Two flavours, dispatched on whether we're inside the image:
+#
+#   On host (rare — host bnk installs via install.sh):
+#     `bnk install`   prints how to install (install.sh / docker run)
+#     `bnk uninstall` removes the host bnk + optionally volume + image
+#
+#   Inside the image (the airgap install path):
+#     docker run --rm -v "$HOME/.local/bin:/dest" $IMAGE bnk install
+#       copies /opt/tf-project/bnk → /dest/bnk and chmods +x.
+#     `bnk uninstall` (in-container) just removes /dest/bnk.
+
+cmd_install() {
+    if ! is_in_container; then
+        local self
+        self=$(realpath "$0" 2>/dev/null || echo "$0")
+        cat <<EOF
+bnk is already installed at $self.
+
+To install on a different host, choose one:
+
+  Online:
+    curl -fsSL https://raw.githubusercontent.com/jgruberf5/ibmcloud_terraform_bigip_next_for_kubernetes_2_3/main/install.sh | bash
+
+  Airgap (image already on disk):
+    docker run --rm -v "\$HOME/.local/bin:/dest" $IMAGE bnk install
+EOF
+        return 0
+    fi
+    if [[ ! -d /dest ]]; then
+        cat >&2 <<EOF
+bnk install: /dest is not mounted.
+
+Mount your bin dir at /dest:
+  docker run --rm -v "\$HOME/.local/bin:/dest" $IMAGE bnk install
+EOF
+        exit 1
+    fi
+    cp /opt/tf-project/bnk /dest/bnk
+    chmod +x /dest/bnk
+    cat <<EOF
+✓ bnk installed to /dest/bnk
+
+Make sure /dest's mount target is on your host PATH. Typically:
+    export PATH="\$HOME/.local/bin:\$PATH"
+
+Then:
+    bnk doctor
+    bnk init
+EOF
+}
+
+cmd_uninstall() {
+    if is_in_container; then
+        if [[ -f /dest/bnk ]]; then
+            rm -f /dest/bnk
+            echo "✓ bnk removed from /dest/bnk"
+        else
+            echo "bnk: nothing at /dest/bnk to remove"
+        fi
+        return 0
+    fi
+
+    # Host path
+    local self
+    self=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")
+
+    cat <<EOF
+
+This will:
+  1. Remove bnk from $self
+  2. Optionally remove the docker volume '$VOLUME'
+       (terraform state, kubeconfig, ibmcloud session — irreversible)
+  3. Optionally remove the docker image '$IMAGE'
+
+EOF
+
+    local ans
+    printf "Remove bnk from %s? [y/N]: " "$self"
+    read -r ans
+    [[ "$ans" =~ ^[Yy] ]] || { echo "aborted."; return 1; }
+
+    printf "Also remove docker volume %s? [y/N]: " "$VOLUME"
+    read -r ans
+    if [[ "$ans" =~ ^[Yy] ]]; then
+        if docker volume rm "$VOLUME" 2>/dev/null; then
+            ok "removed volume $VOLUME"
+        else
+            warn "volume $VOLUME not present"
+        fi
+    fi
+
+    printf "Also remove docker image %s? [y/N]: " "$IMAGE"
+    read -r ans
+    if [[ "$ans" =~ ^[Yy] ]]; then
+        if docker image rm "$IMAGE" 2>/dev/null; then
+            ok "removed image $IMAGE"
+        else
+            warn "image $IMAGE not present"
+        fi
+    fi
+
+    rm -f "$self"
+    echo "✓ uninstalled."
+}
+
 # ── init wizard ─────────────────────────────────────────────
 # Interactive tfvars builder. Runs on the host, prompts for the
 # variables most likely to need overrides, validates the API key
-# against the chosen region by spinning up the image with its
-# entrypoint disabled (so we skip the symlink/init dance and just
-# run `ibmcloud login`), then writes a minimal terraform.tfvars.
+# against the chosen region, then copies the full
+# terraform.tfvars.example out of the image into the cwd and patches
+# the prompted values in place — so the user gets a fully-commented
+# tfvars with every variable visible (not just the 7 we asked about).
 cmd_init() {
     if [[ -f terraform.tfvars ]]; then
         printf "terraform.tfvars already exists in %s\n" "$(pwd)"
@@ -138,11 +254,7 @@ cmd_init() {
     [[ "$create_roks" =~ ^[Yy] ]] || create_bool=false
 
     section "Validating API key against $region"
-    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        fail "image $IMAGE not built — cannot validate"
-        hint "docker build -t $IMAGE ."
-        return 1
-    fi
+    ensure_image
     if docker run --rm --entrypoint "" \
             -e "API_KEY=$api_key" -e "REGION=$region" \
             "$IMAGE" \
@@ -156,22 +268,48 @@ cmd_init() {
     fi
 
     section "Writing terraform.tfvars"
-    cat > terraform.tfvars <<TFVARS
-# Generated by bnk init on $(date -u +%Y-%m-%dT%H:%M:%SZ)
-ibmcloud_api_key          = "$api_key"
-ibmcloud_cluster_region   = "$region"
-ibmcloud_resource_group   = "$rg"
-create_roks_cluster       = $create_bool
-openshift_cluster_name    = "$cluster_name"
-openshift_cluster_version = "$ocp_ver"
-roks_workers_per_zone     = $workers
+    # Step 1: drop the in-image example onto the host. --user keeps the
+    # resulting file owned by the host user (otherwise root inside the
+    # container writes a root-owned file, leaving the user needing sudo
+    # to edit it later). --entrypoint "" skips the entrypoint's symlink
+    # / init dance — we just need a single cp.
+    if ! docker run --rm --entrypoint "" \
+            --user "$(id -u):$(id -g)" \
+            -v "$(pwd):/work" \
+            "$IMAGE" \
+            cp /opt/tf-project/terraform.tfvars.example /work/terraform.tfvars \
+            2>/dev/null; then
+        fail "could not extract terraform.tfvars.example from $IMAGE"
+        return 1
+    fi
 
-# Module defaults apply to every other variable. See
-# terraform.tfvars.example for the full list — copy any you need
-# to override into this file.
-TFVARS
+    # Step 2: patch the prompted values in place. awk's `sub(/=.*/, ...)`
+    # replaces only the value half of the matching line, preserving any
+    # trailing comment is NOT preserved on purpose — terraform.tfvars.example
+    # rarely has trailing comments, and keeping them would require a
+    # more elaborate parser.
+    patch_var() {
+        local key=$1 value=$2 quoted=$3 val
+        if [[ "$quoted" == yes ]]; then val="\"$value\""; else val="$value"; fi
+        awk -v key="$key" -v val="$val" '
+            $0 ~ "^[[:space:]]*"key"[[:space:]]*=[[:space:]]*" {
+                sub(/=.*/, "= " val)
+            }
+            { print }
+        ' terraform.tfvars > terraform.tfvars.tmp \
+            && mv terraform.tfvars.tmp terraform.tfvars
+    }
+
+    patch_var ibmcloud_api_key          "$api_key"      yes
+    patch_var ibmcloud_cluster_region   "$region"       yes
+    patch_var ibmcloud_resource_group   "$rg"           yes
+    patch_var create_roks_cluster       "$create_bool"  no
+    patch_var openshift_cluster_name    "$cluster_name" yes
+    patch_var openshift_cluster_version "$ocp_ver"      yes
+    patch_var roks_workers_per_zone     "$workers"      no
+
     chmod 600 terraform.tfvars
-    ok "terraform.tfvars written"
+    ok "terraform.tfvars written ($(wc -l < terraform.tfvars) lines, all variables included)"
 
     section "Next steps"
     printf "  %sReview:%s  \$EDITOR terraform.tfvars\n" "$C_BOLD" "$C_OFF"
@@ -500,7 +638,7 @@ cmd_completion() {
     body=$(cat <<'COMPLETION_EOF'
 _bnk_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local top="init doctor status infra cluster plan apply destroy output test reset kubectl oc ibmcloud shell exec completion help"
+    local top="init install uninstall doctor status infra cluster plan apply destroy output test reset kubectl oc ibmcloud shell exec completion help"
     local infra_subs="init plan apply destroy output test reset help"
     local cluster_subs="shell kubectl oc ibmcloud info help"
     case "$COMP_CWORD" in
@@ -640,9 +778,11 @@ EOF
 # ── top-level dispatch ──────────────────────────────────────
 CMD="${1:-help}"; shift || true
 case "$CMD" in
-    init)                 cmd_init   "$@" ;;
-    doctor)               cmd_doctor "$@" ;;
-    status)               cmd_status "$@" ;;
+    init)                 cmd_init      "$@" ;;
+    install)              cmd_install   "$@" ;;
+    uninstall)            cmd_uninstall "$@" ;;
+    doctor)               cmd_doctor    "$@" ;;
+    status)               cmd_status    "$@" ;;
     infra)                cmd_infra   "$@" ;;
     cluster)              cmd_cluster "$@" ;;
 

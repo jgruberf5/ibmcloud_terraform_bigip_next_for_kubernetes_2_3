@@ -225,8 +225,9 @@ cmd_init() {
     local api_key region rg create_roks cluster_name workers ocp_ver
 
     # Prompt with default; pass "secret" as 4th arg to suppress echo.
+    # `mode=${4:-}` lets callers omit the 4th arg under `set -u`.
     ask() {
-        local label=$1 default=$2 var=$3 mode=$4 input
+        local label=$1 default=$2 var=$3 mode=${4:-} input
         if [[ "$mode" == secret ]]; then
             printf "  %-30s: " "$label"
             read -r -s input; echo

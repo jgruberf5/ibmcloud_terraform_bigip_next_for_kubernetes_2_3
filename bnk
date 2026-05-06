@@ -1,0 +1,663 @@
+#!/usr/bin/env bash
+# ============================================================
+# bnk — unified CLI for the ibmcloud-terraform-bnk-2-3 runner image
+#
+# Single verb-noun command surface for the docker-based workflow:
+# wraps `docker run` of the runner image and the in-container
+# cloud-exec helper so users learn one command, get tab completion,
+# and `bnk doctor` tells them why something is broken.
+#
+# Common:
+#   bnk init                     interactive tfvars wizard
+#   bnk doctor                   preflight: docker, image, tfvars, IBM Cloud auth
+#   bnk status [--drift]         one-screen: auth, tfstate, cluster, workloads
+#   bnk plan                     terraform plan with module-grouped summary
+#   bnk apply [--auto]           terraform apply (--auto for non-interactive)
+#   bnk destroy                  terraform destroy
+#   bnk shell                    interactive cluster shell (cloud-exec)
+#   bnk kubectl ... | oc ...     one-shot cluster commands
+#
+# Groups:
+#   bnk infra <init|plan|apply|destroy|output|test|reset>
+#   bnk cluster <shell|kubectl|oc|ibmcloud|info>
+#   bnk exec <cmd...>            arbitrary command in container
+#
+# Completion:
+#   source <(bnk completion bash)          # bash
+#   source <(bnk completion zsh)           # zsh
+#
+# Env overrides:
+#   IMAGE   image ref    (default: ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest)
+#   VOLUME  state volume (default: bnk-state)
+# ============================================================
+set -euo pipefail
+
+IMAGE="${IMAGE:-ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest}"
+VOLUME="${VOLUME:-bnk-state}"
+
+# ── tty / color helpers ─────────────────────────────────────
+if [[ -t 1 ]]; then
+    C_OK=$'\e[32m'; C_FAIL=$'\e[31m'; C_WARN=$'\e[33m'
+    C_DIM=$'\e[90m'; C_BOLD=$'\e[1m'; C_OFF=$'\e[0m'
+    SYM_OK="✓"; SYM_FAIL="✗"; SYM_WARN="!"
+else
+    C_OK=""; C_FAIL=""; C_WARN=""; C_DIM=""; C_BOLD=""; C_OFF=""
+    SYM_OK="OK"; SYM_FAIL="FAIL"; SYM_WARN="WARN"
+fi
+ok()      { printf "  %s%s%s %s\n"  "$C_OK"   "$SYM_OK"   "$C_OFF" "$*"; }
+fail()    { printf "  %s%s%s %s\n"  "$C_FAIL" "$SYM_FAIL" "$C_OFF" "$*"; }
+warn()    { printf "  %s%s%s %s\n"  "$C_WARN" "$SYM_WARN" "$C_OFF" "$*"; }
+hint()    { printf "    %s↳ %s%s\n" "$C_DIM"  "$*" "$C_OFF"; }
+section() { printf "\n%s%s%s\n"     "$C_BOLD" "$*" "$C_OFF"; }
+
+# ── docker plumbing ─────────────────────────────────────────
+need_tfvars() {
+    [[ -f "$(pwd)/terraform.tfvars" ]] || {
+        echo "bnk: terraform.tfvars not found in $(pwd)" >&2
+        echo "  cp terraform.tfvars.example terraform.tfvars && \$EDITOR terraform.tfvars" >&2
+        exit 1
+    }
+}
+ensure_volume() {
+    docker volume inspect "$VOLUME" >/dev/null 2>&1 \
+        || docker volume create "$VOLUME" >/dev/null
+}
+# Pull the runner image once, lazily, so a freshly-installed bnk works
+# without a separate `docker pull`. Stays quiet on subsequent runs.
+ensure_image() {
+    docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+    printf "bnk: image %s not found locally — pulling...\n" "$IMAGE" >&2
+    docker pull "$IMAGE" >&2
+}
+docker_run() {
+    ensure_image
+    docker run -it --rm \
+        -v "$VOLUME:/work" \
+        -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
+        "$IMAGE" "$@"
+}
+# Non-interactive variant for probes — no -it, no stdin attached.
+docker_run_quiet() {
+    ensure_image
+    docker run --rm \
+        -v "$VOLUME:/work" \
+        -v "$(pwd)/terraform.tfvars:/work/terraform.tfvars:ro" \
+        "$IMAGE" "$@"
+}
+
+read_tfvar() {
+    awk -F'"' "/^[[:space:]]*$1[[:space:]]*=/{print \$2; exit}" terraform.tfvars
+}
+
+# ── init wizard ─────────────────────────────────────────────
+# Interactive tfvars builder. Runs on the host, prompts for the
+# variables most likely to need overrides, validates the API key
+# against the chosen region by spinning up the image with its
+# entrypoint disabled (so we skip the symlink/init dance and just
+# run `ibmcloud login`), then writes a minimal terraform.tfvars.
+cmd_init() {
+    if [[ -f terraform.tfvars ]]; then
+        printf "terraform.tfvars already exists in %s\n" "$(pwd)"
+        printf "Overwrite (existing → terraform.tfvars.bak)? [y/N]: "
+        local ans; read -r ans
+        [[ "$ans" =~ ^[Yy] ]] || { echo "aborted."; return 1; }
+        mv terraform.tfvars terraform.tfvars.bak
+    fi
+
+    section "bnk init — interactive tfvars wizard"
+
+    local api_key region rg create_roks cluster_name workers ocp_ver
+
+    # Prompt with default; pass "secret" as 4th arg to suppress echo.
+    ask() {
+        local label=$1 default=$2 var=$3 mode=$4 input
+        if [[ "$mode" == secret ]]; then
+            printf "  %-30s: " "$label"
+            read -r -s input; echo
+        elif [[ -n "$default" ]]; then
+            printf "  %-30s [%s]: " "$label" "$default"
+            read -r input
+            input=${input:-$default}
+        else
+            printf "  %-30s: " "$label"
+            read -r input
+        fi
+        printf -v "$var" "%s" "$input"
+    }
+
+    ask "IBM Cloud API key"        ""                     api_key  secret
+    [[ -z "$api_key" ]] && { fail "API key is required"; return 1; }
+    ask "Region"                   "ca-tor"               region
+    ask "Resource group"           "default"              rg
+    ask "Create new ROKS cluster"  "y"                    create_roks
+    ask "Cluster name"             "tf-openshift-cluster" cluster_name
+    ask "Workers per zone"         "1"                    workers
+    ask "OpenShift version"        "4.18"                 ocp_ver
+
+    local create_bool=true
+    [[ "$create_roks" =~ ^[Yy] ]] || create_bool=false
+
+    section "Validating API key against $region"
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        fail "image $IMAGE not built — cannot validate"
+        hint "docker build -t $IMAGE ."
+        return 1
+    fi
+    if docker run --rm --entrypoint "" \
+            -e "API_KEY=$api_key" -e "REGION=$region" \
+            "$IMAGE" \
+            sh -c 'ibmcloud login --apikey "$API_KEY" -r "$REGION"' \
+            >/dev/null 2>&1; then
+        ok "API key works in $region"
+    else
+        fail "ibmcloud login failed for region '$region'"
+        hint "verify the api key value and region code, then re-run"
+        return 1
+    fi
+
+    section "Writing terraform.tfvars"
+    cat > terraform.tfvars <<TFVARS
+# Generated by bnk init on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+ibmcloud_api_key          = "$api_key"
+ibmcloud_cluster_region   = "$region"
+ibmcloud_resource_group   = "$rg"
+create_roks_cluster       = $create_bool
+openshift_cluster_name    = "$cluster_name"
+openshift_cluster_version = "$ocp_ver"
+roks_workers_per_zone     = $workers
+
+# Module defaults apply to every other variable. See
+# terraform.tfvars.example for the full list — copy any you need
+# to override into this file.
+TFVARS
+    chmod 600 terraform.tfvars
+    ok "terraform.tfvars written"
+
+    section "Next steps"
+    printf "  %sReview:%s  \$EDITOR terraform.tfvars\n" "$C_BOLD" "$C_OFF"
+    printf "  %sPlan:%s    bnk plan\n"                  "$C_BOLD" "$C_OFF"
+    printf "  %sApply:%s   bnk apply\n"                 "$C_BOLD" "$C_OFF"
+}
+
+# ── doctor ──────────────────────────────────────────────────
+cmd_doctor() {
+    local failures=0
+
+    section "Host environment"
+    if command -v docker >/dev/null 2>&1; then
+        ok "docker present ($(docker --version | awk '{print $3}' | tr -d ,))"
+    else
+        fail "docker not found"; hint "install Docker Desktop or docker-ce"
+        return 1
+    fi
+    if docker info >/dev/null 2>&1; then
+        ok "docker daemon reachable"
+    else
+        fail "docker daemon unreachable"; hint "start Docker / 'sudo systemctl start docker'"
+        return 1
+    fi
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        local created age_days
+        created=$(docker image inspect -f '{{.Created}}' "$IMAGE")
+        # Compute age inside the container so we don't need GNU date on
+        # the host (BSD `date` lacks -d). jq's `fromdate` parses the
+        # docker timestamp once we strip its fractional seconds. Falls
+        # back to a no-age message if jq isn't in the image yet (older
+        # build pre-dating the jq apk add).
+        age_days=$(docker run --rm --entrypoint "" \
+            -e "CREATED=$created" "$IMAGE" \
+            jq -nr 'env.CREATED | sub("\\.[0-9]+"; "") | fromdate as $t
+                    | (now - $t) / 86400 | floor' 2>/dev/null) || age_days=""
+        if [[ -z "$age_days" ]]; then
+            ok "image $IMAGE present"
+        elif (( age_days > 30 )); then
+            warn "image $IMAGE is ${age_days}d old"
+            hint "rebuild: docker build -t $IMAGE ."
+        else
+            ok "image $IMAGE present (${age_days}d old)"
+        fi
+    else
+        fail "image $IMAGE not built"
+        hint "docker build -t $IMAGE ."
+        failures=$((failures+1))
+    fi
+    if docker volume inspect "$VOLUME" >/dev/null 2>&1; then
+        ok "state volume $VOLUME present"
+    else
+        warn "state volume $VOLUME not yet created (will be on first run)"
+    fi
+
+    section "Project files"
+    if [[ -f terraform.tfvars ]]; then
+        ok "terraform.tfvars present"
+    else
+        fail "terraform.tfvars missing"
+        hint "cp terraform.tfvars.example terraform.tfvars"
+        failures=$((failures+1))
+        printf "\n%s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
+        return 1
+    fi
+    local api_key region
+    api_key=$(read_tfvar ibmcloud_api_key)
+    region=$(read_tfvar ibmcloud_cluster_region)
+    if [[ -n "$api_key" && "$api_key" != "YOUR_"* && "$api_key" != "REPLACE_ME"* ]]; then
+        ok "ibmcloud_api_key set (${#api_key} chars)"
+    else
+        fail "ibmcloud_api_key missing or still a placeholder"
+        failures=$((failures+1))
+    fi
+    if [[ -n "$region" ]]; then
+        ok "ibmcloud_cluster_region = $region"
+    else
+        warn "ibmcloud_cluster_region not set, will default to ca-tor"
+    fi
+
+    section "Container probes"
+    if (( failures > 0 )); then
+        warn "skipping container probes due to earlier failures"
+        printf "\n%s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
+        return 1
+    fi
+    ensure_volume
+    # Single container invocation runs every in-container check at once.
+    # Output lines are key=rc pairs the host parses; stderr is suppressed
+    # because login chatter ("API endpoint: ..." etc.) is not useful here.
+    local probe
+    probe=$(docker_run_quiet bash -c '
+        set +e
+        ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION" >/dev/null 2>&1
+        echo "IBM_LOGIN=$?"
+        terraform -chdir=/work validate -no-color >/dev/null 2>&1
+        echo "TF_VALIDATE=$?"
+    ' 2>/dev/null) || true
+
+    if grep -q '^IBM_LOGIN=0$' <<<"$probe"; then
+        ok "ibmcloud login succeeds (region=$region)"
+    else
+        fail "ibmcloud login failed"
+        hint "verify ibmcloud_api_key and ibmcloud_cluster_region"
+        failures=$((failures+1))
+    fi
+    if grep -q '^TF_VALIDATE=0$' <<<"$probe"; then
+        ok "terraform validate passes"
+    else
+        warn "terraform validate failed (run 'bnk infra init' if this is a fresh volume)"
+    fi
+
+    section "Summary"
+    if (( failures == 0 )); then
+        printf "  %sAll checks passed.%s Try '%sbnk plan%s' next.\n" \
+            "$C_OK" "$C_OFF" "$C_BOLD" "$C_OFF"
+        return 0
+    fi
+    printf "  %s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
+    return 1
+}
+
+# ── plan with summary ───────────────────────────────────────
+# `terraform plan -out` saves the binary plan; we then run
+# `terraform show -no-color` on it (a fast, offline second pass)
+# and pipe the human plan through a bash summarizer that groups
+# resource changes by top-level module. The user sees the normal
+# coloured plan output live; the summary is appended after.
+cmd_plan() {
+    need_tfvars; ensure_volume
+    docker_run bash -c '
+        set -e
+
+        summarize() {
+            declare -A counts groups totals
+            local line addr action_text a g p1 p2 _
+            while IFS= read -r line; do
+                [[ "$line" =~ ^"  # "(.+)" will be "(.+)$ ]] || continue
+                addr=${BASH_REMATCH[1]}
+                action_text=${BASH_REMATCH[2]}
+                case "$action_text" in
+                    created*)   a=add ;;
+                    destroyed*) a=del ;;
+                    replaced*)  a=rep ;;
+                    updated*)   a=chg ;;
+                    *)          continue ;;
+                esac
+                if [[ "$addr" == module.* ]]; then
+                    IFS=. read -r p1 p2 _ <<<"$addr"
+                    g="$p1.$p2"
+                else
+                    g="<root>"
+                fi
+                counts[$g/$a]=$(( ${counts[$g/$a]:-0} + 1 ))
+                groups[$g]=1
+                totals[$a]=$(( ${totals[$a]:-0} + 1 ))
+            done
+
+            local OK=$(printf "\e[32m") WARN=$(printf "\e[33m")
+            local FAIL=$(printf "\e[31m") BOLD=$(printf "\e[1m") OFF=$(printf "\e[0m")
+            printf "\n%s── plan summary ──────────────────────────────────────%s\n" "$BOLD" "$OFF"
+            if (( ${#groups[@]} == 0 )); then
+                printf "  no resource changes\n"
+                return
+            fi
+            printf "  %-40s  %s%4s%s %s%4s%s %s%4s%s %s%4s%s\n" "module" \
+                "$OK" "+add" "$OFF" "$WARN" "~chg" "$OFF" \
+                "$FAIL" "-del" "$OFF" "$FAIL" "±rep" "$OFF"
+            local g
+            while IFS= read -r g; do
+                printf "  %-40s  %4d %4d %4d %4d\n" "$g" \
+                    "${counts[$g/add]:-0}" "${counts[$g/chg]:-0}" \
+                    "${counts[$g/del]:-0}" "${counts[$g/rep]:-0}"
+            done < <(printf "%s\n" "${!groups[@]}" | sort)
+            printf "  %s%-40s  %4d %4d %4d %4d%s\n" "$BOLD" "TOTAL" \
+                "${totals[add]:-0}" "${totals[chg]:-0}" \
+                "${totals[del]:-0}" "${totals[rep]:-0}" "$OFF"
+        }
+
+        plan_file=/work/.bnk-plan.tfplan
+        terraform plan -var-file=terraform.tfvars -out="$plan_file" "$@"
+        terraform show -no-color "$plan_file" | summarize
+        rm -f "$plan_file"
+    ' -- "$@"
+}
+
+# ── status ──────────────────────────────────────────────────
+# One-screen dashboard: IBM Cloud auth, terraform state freshness,
+# cluster health, and BIG-IP-NEXT-specific namespace pod counts.
+# Runs inside a single docker_run so cloud-exec's login/kubeconfig
+# cache is hit at most once. All parsing is bash + grep/cut — no
+# awk scripts, since this script body lives inside an outer
+# single-quoted bash -c heredoc.
+cmd_status() {
+    local check_drift=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --drift) check_drift=true; shift ;;
+            -h|--help)
+                echo "Usage: bnk status [--drift]"
+                echo "  --drift   refresh state against IBM Cloud and report drift (slow)"
+                return 0 ;;
+            *) echo "bnk status: unknown option '$1'" >&2; return 1 ;;
+        esac
+    done
+    need_tfvars; ensure_volume
+    docker_run bash -c '
+        set +e
+
+        CHECK_DRIFT=$1
+
+        BOLD=$(printf "\e[1m");  DIM=$(printf "\e[90m")
+        OK=$(printf "\e[32m");   WARN=$(printf "\e[33m")
+        FAIL=$(printf "\e[31m"); OFF=$(printf "\e[0m")
+
+        section() { printf "\n%s%s%s\n" "$BOLD" "$1" "$OFF"; }
+        kv() { printf "  %-14s  %s\n" "$1" "$2"; }
+
+        read_tfvar() {
+            local key=$1 line
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+                    printf "%s" "${BASH_REMATCH[1]}"
+                    return
+                fi
+            done < /work/terraform.tfvars
+        }
+
+        printf "%sgathering status...%s\n" "$DIM" "$OFF" >&2
+
+        # Cloud-exec covers both ibmcloud login and kubeconfig fetch; if it
+        # exits clean we know auth + cluster are reachable for the cluster
+        # and workloads sections. ibmcloud login alone (without kubeconfig)
+        # is enough for the IBM Cloud section, so we tolerate cloud-exec
+        # failure and fall back to a direct login.
+        CLUSTER_OK=false; CLUSTER=""
+        if cloud-exec true >/dev/null 2>&1; then
+            CLUSTER_OK=true
+            CLUSTER=$(cat "$KUBECONFIG.cluster-id" 2>/dev/null)
+        else
+            ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION" >/dev/null 2>&1
+        fi
+
+        section "IBM Cloud"
+        kv region "$IBMCLOUD_REGION"
+        ACCT=$(ibmcloud account show 2>/dev/null \
+            | grep -iE "^Account[[:space:]]+(Name|ID):" \
+            | head -1 | cut -d: -f2- | xargs)
+        [[ -n "$ACCT" ]] && kv account "$ACCT"
+
+        section "Terraform"
+        if [[ -f /work/terraform.tfstate ]]; then
+            N=$(cd /work && terraform state list 2>/dev/null | wc -l)
+            MTIME=$(stat -c %Y /work/terraform.tfstate)
+            AGE_MIN=$(( ( $(date +%s) - MTIME ) / 60 ))
+            if   (( AGE_MIN <   60 )); then AGE="${AGE_MIN}m"
+            elif (( AGE_MIN < 1440 )); then AGE="$((AGE_MIN/60))h"
+            else                            AGE="$((AGE_MIN/1440))d"
+            fi
+            kv state "$N resources, ${AGE} since last write"
+            if [[ "$CHECK_DRIFT" == true ]]; then
+                printf "  %schecking drift...%s\r" "$DIM" "$OFF" >&2
+                ( cd /work && terraform plan -refresh-only -detailed-exitcode \
+                    -input=false -no-color -lock=false \
+                    -var-file=terraform.tfvars ) >/dev/null 2>&1
+                DRIFT_RC=$?
+                printf "                            \r" >&2
+                case $DRIFT_RC in
+                    0) kv drift "${OK}none${OFF}" ;;
+                    2) kv drift "${WARN}detected${OFF} — run: bnk plan -refresh-only" ;;
+                    *) kv drift "${DIM}check failed${OFF}" ;;
+                esac
+            fi
+        else
+            kv state "${DIM}no state yet${OFF} — run: bnk plan && bnk apply"
+        fi
+
+        if $CLUSTER_OK; then
+            section "Cluster  $CLUSTER"
+            CINFO=$(ibmcloud ks cluster get --cluster "$CLUSTER" 2>/dev/null)
+            for FIELD in "State:state" "Master Status:masters" \
+                         "Master Version:version" "Ingress Subdomain:ingress" \
+                         "Workers:workers"; do
+                K=${FIELD%%:*}; LABEL=${FIELD##*:}
+                V=$(printf "%s" "$CINFO" | grep "^${K}:" | head -1 | cut -d: -f2- | xargs)
+                [[ -n "$V" ]] && kv "$LABEL" "$V"
+            done
+
+            NT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+            NR=$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready ")
+            if (( NT > 0 )); then
+                if (( NR == NT )); then C=$OK; else C=$WARN; fi
+                kv nodes "${C}${NR}/${NT} Ready${OFF}"
+            fi
+
+            section "Workloads"
+            FOUND=0
+            for VAR in flo_namespace flo_utils_namespace cert_manager_namespace; do
+                NS=$(read_tfvar "$VAR")
+                [[ -z "$NS" ]] && continue
+                FOUND=1
+                T=$(kubectl -n "$NS" get pods --no-headers 2>/dev/null | wc -l)
+                if (( T == 0 )); then
+                    kv "$NS" "${DIM}no pods${OFF}"
+                    continue
+                fi
+                R=$(kubectl -n "$NS" get pods --no-headers 2>/dev/null \
+                    | grep -cE " (Running|Completed) ")
+                if (( R == T )); then C=$OK; else C=$WARN; fi
+                kv "$NS" "${C}${R}/${T}${OFF}"
+            done
+            (( FOUND == 0 )) && kv "(none)" "${DIM}no namespace tfvars set${OFF}"
+        else
+            section "Cluster"
+            kv state "${DIM}not reachable${OFF} — try: bnk doctor"
+        fi
+
+        echo
+    ' -- "$check_drift"
+}
+
+# ── completion ──────────────────────────────────────────────
+cmd_completion() {
+    local shell="${1:-}"
+    local body
+    body=$(cat <<'COMPLETION_EOF'
+_bnk_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local top="init doctor status infra cluster plan apply destroy output test reset kubectl oc ibmcloud shell exec completion help"
+    local infra_subs="init plan apply destroy output test reset help"
+    local cluster_subs="shell kubectl oc ibmcloud info help"
+    case "$COMP_CWORD" in
+        1) COMPREPLY=( $(compgen -W "$top" -- "$cur") ) ;;
+        2)
+            case "${COMP_WORDS[1]}" in
+                infra)      COMPREPLY=( $(compgen -W "$infra_subs"   -- "$cur") ) ;;
+                cluster)    COMPREPLY=( $(compgen -W "$cluster_subs" -- "$cur") ) ;;
+                completion) COMPREPLY=( $(compgen -W "bash zsh"      -- "$cur") ) ;;
+            esac ;;
+    esac
+}
+complete -F _bnk_complete bnk
+COMPLETION_EOF
+)
+    case "$shell" in
+        bash) printf '%s\n' "$body" ;;
+        zsh)  printf 'autoload -U +X bashcompinit && bashcompinit\n%s\n' "$body" ;;
+        *)
+            cat >&2 <<'EOF'
+Usage: bnk completion <bash|zsh>
+
+Bash:  source <(bnk completion bash)
+       (or persist: bnk completion bash >> ~/.bash_completion)
+
+Zsh:   source <(bnk completion zsh)
+EOF
+            exit 1 ;;
+    esac
+}
+
+# ── infra ───────────────────────────────────────────────────
+cmd_infra() {
+    local sub="${1:-help}"; shift || true
+    case "$sub" in
+        help|"") cat <<'EOF'
+bnk infra <subcommand>
+  init                  terraform init
+  plan                  terraform plan with module-grouped summary
+  apply [--auto]        terraform apply (--auto adds -auto-approve)
+  destroy               terraform destroy
+  output [name]         terraform output
+  test [args...]        ./run_tests.sh inside container
+  reset                 wipe the docker state volume (irreversible)
+EOF
+            return 0 ;;
+        reset) cmd_reset; return $? ;;
+    esac
+    need_tfvars; ensure_volume
+    case "$sub" in
+        init)    docker_run terraform init "$@" ;;
+        plan)    cmd_plan "$@" ;;
+        apply)
+            # --auto is a bnk-only flag; everything else passes through.
+            local auto=()
+            local rest=()
+            for a in "$@"; do
+                if [[ "$a" == --auto ]]; then auto=(-auto-approve)
+                else rest+=("$a")
+                fi
+            done
+            docker_run terraform apply -var-file=terraform.tfvars \
+                "${auto[@]}" "${rest[@]}"
+            ;;
+        destroy) docker_run terraform destroy -var-file=terraform.tfvars "$@" ;;
+        output)  docker_run terraform output "$@" ;;
+        test)    docker_run ./run_tests.sh "$@" ;;
+        *) echo "bnk infra: unknown subcommand '$sub'" >&2; exit 1 ;;
+    esac
+}
+
+# ── reset ───────────────────────────────────────────────────
+# Nukes the docker volume that holds tfstate, .terraform/, the
+# kubeconfig, and the ibmcloud session. Host-side operation —
+# no need_tfvars / ensure_volume / docker_run.
+cmd_reset() {
+    if ! docker volume inspect "$VOLUME" >/dev/null 2>&1; then
+        echo "bnk infra reset: volume '$VOLUME' does not exist — nothing to do."
+        return 0
+    fi
+    cat <<EOF
+
+This will permanently delete the docker volume '$VOLUME', which holds:
+
+  - terraform.tfstate (cluster + VPC + transit gateway records)
+  - .terraform/ provider cache and lock file
+  - .kube/config (kubeconfig)
+  - .bluemix/ (ibmcloud session + plugins)
+
+If you have a live cluster provisioned by this state, run 'bnk destroy'
+first — otherwise the cluster will keep running but you will lose the
+ability to manage it from here.
+
+EOF
+    printf "Type the volume name to confirm (%s): " "$VOLUME"
+    local ans; read -r ans
+    if [[ "$ans" != "$VOLUME" ]]; then
+        echo "aborted."
+        return 1
+    fi
+    docker volume rm "$VOLUME" >/dev/null
+    ok "volume $VOLUME removed"
+}
+
+# ── cluster ─────────────────────────────────────────────────
+cmd_cluster() {
+    local sub="${1:-shell}"; shift || true
+    case "$sub" in
+        help) cat <<'EOF'
+bnk cluster <subcommand>
+  shell                interactive cloud-exec shell (default)
+  kubectl ...          one-shot kubectl with cluster auth
+  oc ...               one-shot oc
+  ibmcloud ...         one-shot ibmcloud
+  info                 cluster + node summary
+EOF
+            return 0 ;;
+    esac
+    need_tfvars; ensure_volume
+    case "$sub" in
+        shell)               docker_run cloud-exec "$@" ;;
+        kubectl|oc|ibmcloud) docker_run cloud-exec "$sub" "$@" ;;
+        info)
+            docker_run cloud-exec bash -c '
+                set -e
+                echo "── cluster ──"
+                ibmcloud ks cluster get --cluster "$(cat "$KUBECONFIG.cluster-id")" 2>/dev/null \
+                    | grep -E "^(Name|State|Master Status|Ingress|Workers|Version):"
+                echo
+                echo "── nodes ──"
+                kubectl get nodes
+            ' ;;
+        *) echo "bnk cluster: unknown subcommand '$sub'" >&2; exit 1 ;;
+    esac
+}
+
+# ── top-level dispatch ──────────────────────────────────────
+CMD="${1:-help}"; shift || true
+case "$CMD" in
+    init)                 cmd_init   "$@" ;;
+    doctor)               cmd_doctor "$@" ;;
+    status)               cmd_status "$@" ;;
+    infra)                cmd_infra   "$@" ;;
+    cluster)              cmd_cluster "$@" ;;
+
+    # Short aliases for the common flows — `bnk plan` → `bnk infra plan`.
+    plan|apply|destroy|output|test)
+                          cmd_infra   "$CMD" "$@" ;;
+    kubectl|oc|ibmcloud)  cmd_cluster "$CMD" "$@" ;;
+    shell)                cmd_cluster shell "$@" ;;
+
+    exec)                 need_tfvars; ensure_volume; docker_run "$@" ;;
+    completion)           cmd_completion "$@" ;;
+
+    -h|--help|help)
+        sed -n '2,/^[^#]/{/^#/!q; s/^# \{0,2\}//p}' "$0" ;;
+    *)
+        echo "bnk: unknown command '$CMD' — see 'bnk help'" >&2
+        exit 1 ;;
+esac

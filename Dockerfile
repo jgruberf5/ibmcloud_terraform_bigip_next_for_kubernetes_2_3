@@ -4,7 +4,6 @@
 #
 # Smallest Alpine-based image that can run:
 #   - terraform (CLI)
-#   - ./deploy.sh
 #   - ./run_tests.sh
 #
 # Modules call out to kubectl / helm / curl / tar via local-exec
@@ -33,6 +32,7 @@ RUN echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >>
         curl \
         gcompat \
         helm \
+        jq \
         kubectl \
         python3 \
         tar \
@@ -101,8 +101,7 @@ COPY . ${PROJECT_DIR}/
 # scenario `terraform init` is a no-network operation.
 RUN mkdir -p "${TF_PLUGIN_CACHE_DIR}" \
     && terraform init -backend=false -input=false \
-    && chmod +x ${PROJECT_DIR}/deploy.sh \
-                 ${PROJECT_DIR}/run_tests.sh \
+    && chmod +x ${PROJECT_DIR}/run_tests.sh \
                  ${PROJECT_DIR}/docker-entrypoint.sh \
                  ${PROJECT_DIR}/cloud-exec \
     && ln -sf ${PROJECT_DIR}/cloud-exec /usr/local/bin/cloud-exec

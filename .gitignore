@@ -8,6 +8,7 @@ terraform.tfstate.backup
 .terraform/
 .terraform.lock.hcl
 .terraform-provider-cache/
+remove_terraform_state
 
 # Environment files
 .env

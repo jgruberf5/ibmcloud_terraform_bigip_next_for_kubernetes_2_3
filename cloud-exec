@@ -31,6 +31,16 @@ read_tfvar() {
     awk -F'"' "/^[[:space:]]*$1[[:space:]]*=/{print \$2; exit}" "$TFVARS"
 }
 
+# `terraform output -raw NAME` against a state with zero outputs prints the
+# "No outputs found" warning to *stdout* (not stderr) and exits 0, so the
+# diagnostic leaks past 2>/dev/null and becomes the captured value. -json
+# errors cleanly in that case; we strip the surrounding quotes here.
+tf_output_str() {
+    local raw
+    raw=$(terraform output -json "$1" 2>/dev/null) || return 0
+    [[ "$raw" =~ ^\"(.*)\"$ ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+
 # ── Arg parsing ─────────────────────────────────────────────
 CLUSTER_OVERRIDE=""
 while [[ $# -gt 0 && "$1" == -* ]]; do
@@ -56,7 +66,7 @@ mkdir -p "$(dirname "$KUBECONFIG")"
 
 # ── Cluster discovery ───────────────────────────────────────
 CLUSTER="$CLUSTER_OVERRIDE"
-[[ -z "$CLUSTER" ]] && CLUSTER=$(terraform output -raw roks_cluster_id 2>/dev/null || true)
+[[ -z "$CLUSTER" ]] && CLUSTER=$(tf_output_str roks_cluster_id)
 [[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar roks_cluster_id_or_name)
 [[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar openshift_cluster_name)
 [[ -n "$CLUSTER" ]] || {

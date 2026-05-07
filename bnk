@@ -16,7 +16,8 @@
 #   bnk plan                     terraform plan with module-grouped summary
 #   bnk apply [--auto]           terraform apply (--auto for non-interactive)
 #   bnk destroy                  terraform destroy
-#   bnk delete                   remove .bnk/ from cwd (after typed confirm)
+#   bnk delete [--force]         remove .bnk/ from cwd (after typed confirm)
+#   bnk teardown                 destroy + delete in one shot
 #   bnk shell                    interactive cluster shell (cloud-exec)
 #   bnk kubectl ... | oc ...     one-shot cluster commands
 #
@@ -800,7 +801,7 @@ cmd_completion() {
     body=$(cat <<'COMPLETION_EOF'
 _bnk_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local top="init install uninstall doctor status infra cluster plan apply destroy delete output test kubectl oc ibmcloud shell exec completion help"
+    local top="init install uninstall doctor status infra cluster plan apply destroy delete teardown output test kubectl oc ibmcloud shell exec completion help"
     local infra_subs="init plan apply destroy delete output test help"
     local cluster_subs="shell kubectl oc ibmcloud info help"
     case "$COMP_CWORD" in
@@ -847,7 +848,7 @@ bnk infra <subcommand>
   delete                remove .bnk/ from cwd (state, kubeconfig, session)
 EOF
             return 0 ;;
-        delete) cmd_delete; return $? ;;
+        delete) cmd_delete "$@"; return $? ;;
     esac
     need_tfvars
     # Standard flags every plan/apply/destroy needs: read state from
@@ -881,11 +882,56 @@ EOF
 # ── delete ──────────────────────────────────────────────────
 # Removes the .bnk/ directory in the cwd. terraform.tfvars is the only
 # bnk-relevant file outside .bnk/ and is left alone (user-edited input).
+# Refuses by default if terraform.tfstate lists provisioned resources
+# (so users don't orphan a live cluster); --force overrides.
 cmd_delete() {
+    local force=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f) force=true; shift ;;
+            -h|--help)
+                echo "Usage: bnk delete [--force]"
+                echo "  --force   skip the 'tfstate has provisioned resources' guard"
+                return 0 ;;
+            *) echo "bnk delete: unknown option '$1'" >&2; return 1 ;;
+        esac
+    done
+
     if [[ ! -d "$BNK_DIR" ]]; then
         echo "bnk delete: no $BNK_DIR/ in $(pwd) — nothing to do."
         return 0
     fi
+
+    # Guard: if the state file has any managed resources, deleting
+    # local state would orphan whatever's running in IBM Cloud. grep
+    # against the json is faster than a `terraform state list` round-
+    # trip and stays correct for any resource type.
+    if [[ "$force" != true \
+        && -f "$BNK_DIR/terraform.tfstate" \
+        && -s "$BNK_DIR/terraform.tfstate" ]] \
+       && grep -q '"mode": "managed"' "$BNK_DIR/terraform.tfstate"; then
+        cat >&2 <<EOF
+
+bnk delete: refusing — terraform.tfstate lists provisioned resources.
+
+If you delete .bnk/ now, whatever is running in IBM Cloud will be
+orphaned: the cluster keeps billing and you lose the ability to manage
+or remove it from this directory.
+
+Recommended:
+  bnk destroy        # tear down the infrastructure first
+  bnk delete         # then clear local state
+
+Or do both in one shot:
+  bnk teardown
+
+Or, if you really mean "drop local state and leave the cloud alone":
+  bnk delete --force
+
+EOF
+        return 1
+    fi
+
     cat <<EOF
 
 This will permanently delete $(pwd)/$BNK_DIR/, which holds:
@@ -909,6 +955,51 @@ EOF
         echo "aborted."
         return 1
     fi
+    rm -rf "$BNK_DIR"
+    ok "removed $BNK_DIR/"
+}
+
+# ── teardown ────────────────────────────────────────────────
+# `bnk destroy` followed by `bnk delete` in a single command. Single
+# typed confirmation up front, then runs terraform destroy
+# -auto-approve and removes .bnk/ on success. If destroy fails .bnk/
+# is preserved so the user can inspect logs and retry.
+cmd_teardown() {
+    if [[ ! -d "$BNK_DIR" ]]; then
+        echo "bnk teardown: no $BNK_DIR/ in $(pwd) — nothing to do."
+        echo "  (run 'bnk apply' first if you need to provision)"
+        return 0
+    fi
+    need_tfvars
+    cat <<EOF
+
+This will run, in order:
+
+  1. bnk destroy   — terraform destroy every resource in tfstate
+  2. bnk delete    — remove $(pwd)/$BNK_DIR/ (local state + caches)
+
+If destroy fails, .bnk/ is preserved so you can inspect logs and
+retry. terraform.tfvars is left alone in either case.
+
+EOF
+    printf "Type 'teardown' to confirm: "
+    local ans; read -r ans
+    if [[ "$ans" != "teardown" ]]; then
+        echo "aborted."
+        return 1
+    fi
+
+    section "Destroying infrastructure"
+    ensure_tf_init
+    if ! tf destroy -auto-approve \
+            -state=/work/.bnk/terraform.tfstate \
+            -var-file=/work/terraform.tfvars; then
+        fail "destroy failed — $BNK_DIR/ preserved for retry"
+        return 1
+    fi
+    ok "destroy complete"
+
+    section "Removing local state"
     rm -rf "$BNK_DIR"
     ok "removed $BNK_DIR/"
 }
@@ -959,6 +1050,7 @@ case "$CMD" in
     # Short aliases for the common flows — `bnk plan` → `bnk infra plan`.
     plan|apply|destroy|delete|output|test)
                           cmd_infra   "$CMD" "$@" ;;
+    teardown)             cmd_teardown "$@" ;;
     kubectl|oc|ibmcloud)  cmd_cluster "$CMD" "$@" ;;
     shell)                cmd_cluster shell "$@" ;;
 

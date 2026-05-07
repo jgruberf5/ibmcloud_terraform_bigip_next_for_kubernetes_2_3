@@ -87,7 +87,8 @@ tab completion.
 | `bnk plan`                    | `terraform plan` plus a module-grouped change summary (`+add ~chg -del ±rep`) |
 | `bnk apply [--auto]`          | `terraform apply` (interactive); `--auto` adds `-auto-approve` for CI |
 | `bnk destroy`                 | `terraform destroy` |
-| `bnk delete`                  | `rm -rf .bnk` after a typed confirmation — clears state and caches in cwd |
+| `bnk delete [--force]`        | `rm -rf .bnk` after a typed confirmation. Refuses if tfstate has provisioned resources (`--force` overrides) — keeps you from orphaning a live cluster |
+| `bnk teardown`                | `bnk destroy` + `bnk delete` in one command, single confirmation |
 | `bnk shell`                   | Interactive shell with kubeconfig + ibmcloud session in place |
 | `bnk kubectl …` / `oc …` / `ibmcloud …` | One-shot cluster commands |
 | `bnk completion <bash\|zsh>`  | Print completion script — `source <(./bnk completion bash)` |
@@ -162,14 +163,29 @@ table by parsing the saved plan:
 summary line counts them as both, which is misleading. `data` reads are
 ignored.
 
-### `bnk delete`
+### `bnk delete` and `bnk teardown`
 
-`rm -rf .bnk` after a typed `delete` confirmation — wipes terraform
-state, kubeconfig, ibmcloud session, plan files, and per-run test
-state in one stroke. `terraform.tfvars` is left alone. Available as
-both `bnk delete` (top-level) and `bnk infra delete`. **If a cluster
-is provisioned, run `bnk destroy` first** — otherwise the cluster
-keeps running but you lose the ability to manage it from here.
+`bnk delete` is `rm -rf .bnk` after a typed `delete` confirmation —
+wipes terraform state, kubeconfig, ibmcloud session, plan files, and
+per-run test state in one stroke. `terraform.tfvars` is left alone.
+
+**Guard rail:** if `terraform.tfstate` lists provisioned resources,
+`bnk delete` refuses and points at `bnk destroy` first. This keeps
+you from orphaning a live cluster (it would keep billing, and you'd
+lose the ability to manage it from here). Pass `--force` to skip the
+guard if you really mean "drop local state, leave the cloud alone".
+
+`bnk teardown` is the convenience: one typed confirmation, then
+`terraform destroy -auto-approve` followed by `rm -rf .bnk`. If the
+destroy fails partway through, `.bnk/` is preserved so you can
+inspect logs and retry.
+
+| Goal                                              | Command       |
+|---------------------------------------------------|---------------|
+| Tear down the cloud, keep state for re-apply      | `bnk destroy` |
+| Drop local state (only if no resources)           | `bnk delete`  |
+| Drop local state regardless                       | `bnk delete --force` |
+| Tear down the cloud and drop state in one go      | `bnk teardown` |
 
 ### Tab completion
 

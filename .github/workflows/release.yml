@@ -111,6 +111,15 @@ jobs:
           docker run --rm --entrypoint "" "$IMAGE" \
             sh -c 'TF_DATA_DIR=/opt/tf-project/.terraform terraform -chdir=/opt/tf-project validate -no-color'
 
+      - name: Install bnk onto the runner from the image
+        run: |
+          docker run --rm --entrypoint "" \
+              -v "$RUNNER_TEMP:/dest" \
+              "$IMAGE" \
+              cp /opt/tf-project/bnk /dest/bnk
+          chmod +x "$RUNNER_TEMP/bnk"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
       - name: bnk doctor with stub tfvars fails at IBM Cloud login (expected)
         run: |
           set +e
@@ -119,13 +128,12 @@ jobs:
           ibmcloud_api_key = "STUB-INVALID-KEY-FOR-CI"
           ibmcloud_cluster_region = "ca-tor"
           TFVARS
-          docker run --rm \
-              -u "$(id -u):$(id -g)" \
-              -v /tmp/smoke:/work \
-              "$IMAGE" bnk doctor 2>&1 | tee /tmp/doctor.log
+          # Run bnk on the runner host (where docker actually exists),
+          # pinning the IMAGE to the just-pushed tag so doctor's
+          # in-container probes use this build.
+          cd /tmp/smoke
+          IMAGE="$IMAGE" bnk doctor 2>&1 | tee /tmp/doctor.log
           rc=${PIPESTATUS[0]}
-          # We expect doctor to exit non-zero (login probe should fail
-          # against the stub key). Any other outcome is a regression.
           if (( rc == 0 )); then
             echo "::error::bnk doctor unexpectedly succeeded with a stub API key"
             exit 1
@@ -134,7 +142,6 @@ jobs:
             echo "::error::doctor should report 'ibmcloud login failed' on a stub key"
             exit 1
           }
-          # And the host-side checks must have all passed before the probe
           grep -q "current directory writable" /tmp/doctor.log || {
             echo "::error::doctor's host-environment section regressed"
             exit 1

@@ -4,6 +4,19 @@ variable "enabled" {
   default     = false
 }
 
+# Directory for artifacts that have to survive across `terraform apply`
+# invocations (FAR auth tarball, extracted JSON read later by data.local_file
+# resources). The default lives under .bnk/ in the bind-mounted cwd so the
+# bnk runner image preserves these files between docker runs. Inside the
+# image /tmp is lost when the container exits, which would orphan these
+# files between the null_resource that created them and the data.local_file
+# that reads them on a later apply.
+variable "scratch_dir" {
+  description = "Persistent scratch directory for cross-apply artifacts (FAR tarball, extracted JSON). Inside the bnk runner this lives in the cwd's .bnk/ subdir."
+  type        = string
+  default     = "/work/.bnk/scratch"
+}
+
 variable "cert_manager_crd_ready" {
   description = "Set to true when cert-manager has been applied and its CRDs are registered"
   type        = bool

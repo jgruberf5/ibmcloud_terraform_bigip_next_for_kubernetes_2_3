@@ -165,15 +165,20 @@ data "http" "iam_token" {
 resource "null_resource" "far_archive_download" {
   count = local.global_enabled && var.use_cos_bucket ? 1 : 0
 
+  # scratch_dir included so a path change forces a re-download —
+  # otherwise stale state from a previous /tmp-based apply would
+  # leave the data.local_file resources reading a non-existent path.
   triggers = {
-    bucket   = var.ibmcloud_resources_cos_bucket
-    filename = var.f5_cne_far_auth_file
-    region   = var.ibmcloud_cos_bucket_region
+    bucket      = var.ibmcloud_resources_cos_bucket
+    filename    = var.f5_cne_far_auth_file
+    region      = var.ibmcloud_cos_bucket_region
+    scratch_dir = var.scratch_dir
   }
 
   provisioner "local-exec" {
     command = <<-EOT
-      curl -s -f -o /tmp/${var.f5_cne_far_auth_file} \
+      mkdir -p "${var.scratch_dir}"
+      curl -s -f -o "${var.scratch_dir}/${var.f5_cne_far_auth_file}" \
         -H "Authorization: Bearer ${jsondecode(data.http.iam_token[0].response_body).access_token}" \
         -H "ibm-service-instance-id: ${data.ibm_resource_instance.cos_instance[0].guid}" \
         "https://s3.${var.ibmcloud_cos_bucket_region}.cloud-object-storage.appdomain.cloud/${var.ibmcloud_resources_cos_bucket}/${var.f5_cne_far_auth_file}"
@@ -185,20 +190,22 @@ resource "null_resource" "cne_far_tgz_extractor" {
   count = local.global_enabled && var.use_cos_bucket ? 1 : 0
 
   triggers = {
-    archive_id = null_resource.far_archive_download[0].id
+    archive_id  = null_resource.far_archive_download[0].id
+    scratch_dir = var.scratch_dir
   }
 
   provisioner "local-exec" {
     command = <<-EOT
-      tar -xzf /tmp/${var.f5_cne_far_auth_file} -C /tmp/
-      tar -tzf /tmp/${var.f5_cne_far_auth_file} | grep '\.json$' | head -1 > /tmp/far_extracted_filename.txt
+      mkdir -p "${var.scratch_dir}"
+      tar -xzf "${var.scratch_dir}/${var.f5_cne_far_auth_file}" -C "${var.scratch_dir}/"
+      tar -tzf "${var.scratch_dir}/${var.f5_cne_far_auth_file}" | grep '\.json$' | head -1 > "${var.scratch_dir}/far_extracted_filename.txt"
     EOT
   }
 }
 
 data "local_file" "far_extracted_filename" {
   count      = local.global_enabled && var.use_cos_bucket ? 1 : 0
-  filename   = "/tmp/far_extracted_filename.txt"
+  filename   = "${var.scratch_dir}/far_extracted_filename.txt"
   depends_on = [null_resource.cne_far_tgz_extractor]
 }
 
@@ -231,7 +238,7 @@ locals {
 
 data "local_file" "cne_pull_64_json_file" {
   count      = local.global_enabled && var.use_cos_bucket ? 1 : 0
-  filename   = "/tmp/${local.far_extracted_filename}"
+  filename   = "${var.scratch_dir}/${local.far_extracted_filename}"
   depends_on = [null_resource.cne_far_tgz_extractor]
 }
 

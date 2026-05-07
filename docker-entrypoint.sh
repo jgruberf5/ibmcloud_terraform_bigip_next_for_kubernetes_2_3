@@ -78,12 +78,19 @@ export IBMCLOUD_VERSION_CHECK="${IBMCLOUD_VERSION_CHECK:-false}"
 # Seed the user's .bluemix from the build-time template on first run.
 # Plugins (ks, vpc-infrastructure) and the --check-version=false
 # config are installed under /opt/ibmcloud-template/.bluemix in the
-# Dockerfile (world-readable). cp -rn means existing user state
-# (config.json with creds, target context, etc.) is preserved while
-# missing pieces — typically plugins/ — get added.
+# Dockerfile (world-readable).
+#
+# Per-item, not `cp -rn ... /. ...`: busybox cp's -n on a directory
+# source bails out entirely when the destination dir already exists
+# (vs GNU cp's per-file no-clobber). Test each item ourselves so
+# missing pieces fill in without touching anything the user already
+# has — login may have updated config.json with creds.
 if [[ -d /opt/ibmcloud-template/.bluemix ]]; then
     mkdir -p "$WORK_DIR/.bnk/.bluemix"
-    cp -rn /opt/ibmcloud-template/.bluemix/. "$WORK_DIR/.bnk/.bluemix/" 2>/dev/null || true
+    [[ -e "$WORK_DIR/.bnk/.bluemix/plugins" ]] \
+        || cp -r /opt/ibmcloud-template/.bluemix/plugins "$WORK_DIR/.bnk/.bluemix/plugins"
+    [[ -e "$WORK_DIR/.bnk/.bluemix/config.json" ]] \
+        || cp /opt/ibmcloud-template/.bluemix/config.json "$WORK_DIR/.bnk/.bluemix/config.json"
 fi
 
 # Pre-create the per-module kubeconfig dirs. ibm_container_cluster_config

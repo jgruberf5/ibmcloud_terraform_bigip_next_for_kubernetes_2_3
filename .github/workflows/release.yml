@@ -113,7 +113,11 @@ jobs:
 
       - name: Install bnk onto the runner from the image
         run: |
+          # --user keeps the copied file owned by the runner user so
+          # the chmod below works (without it, root-in-container
+          # writes a root-owned file the runner can't modify).
           docker run --rm --entrypoint "" \
+              --user "$(id -u):$(id -g)" \
               -v "$RUNNER_TEMP:/dest" \
               "$IMAGE" \
               cp /opt/tf-project/bnk /dest/bnk

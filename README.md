@@ -16,7 +16,7 @@ have to type `docker run -it --rm -v …` yourself.
 
 <!-- BNK_INSTALL_URL_BEGIN -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jgruberf5/ibmcloud_terraform_bigip_next_for_kubernetes_2_3/v0.6.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jgruberf5/ibmcloud_terraform_bigip_next_for_kubernetes_2_3/v0.6.2/install.sh | bash
 ```
 <!-- BNK_INSTALL_URL_END -->
 

@@ -454,7 +454,8 @@ resource "null_resource" "extract_flo_version" {
   }
 
   triggers = {
-    manifest_version = var.f5_bigip_k8s_manifest_version
+    manifest_version      = var.f5_bigip_k8s_manifest_version
+    manifest_download_dir = var.manifest_download_dir
   }
 
   depends_on = [null_resource.cne_far_tgz_extractor]
@@ -756,10 +757,11 @@ resource "null_resource" "f5_lifecycle_operator" {
   count = local.global_enabled ? 1 : 0
 
   triggers = {
-    manifest_version = var.f5_bigip_k8s_manifest_version
-    flo_namespace    = var.flo_namespace
-    kube_host        = var.kube_host
-    kube_token       = var.kube_token
+    manifest_version      = var.f5_bigip_k8s_manifest_version
+    manifest_download_dir = var.manifest_download_dir
+    flo_namespace         = var.flo_namespace
+    kube_host             = var.kube_host
+    kube_token            = var.kube_token
   }
 
   provisioner "local-exec" {
@@ -833,10 +835,11 @@ resource "null_resource" "f5_bnk_cis" {
   count = local.global_enabled ? 1 : 0
 
   triggers = {
-    manifest_version = var.f5_bigip_k8s_manifest_version
-    flo_namespace    = var.flo_namespace
-    kube_host        = var.kube_host
-    kube_token       = var.kube_token
+    manifest_version      = var.f5_bigip_k8s_manifest_version
+    manifest_download_dir = var.manifest_download_dir
+    flo_namespace         = var.flo_namespace
+    kube_host             = var.kube_host
+    kube_token            = var.kube_token
   }
 
   provisioner "local-exec" {

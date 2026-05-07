@@ -42,9 +42,9 @@ variable "f5_bigip_k8s_manifest_version" {
 }
 
 variable "manifest_download_dir" {
-  description = "Directory to download and extract manifest chart"
+  description = "Directory to download and extract the f5-bigip-k8s-manifest chart. Lives under .bnk/ so the extracted flo-version.txt and cis-version.txt files survive between bnk container invocations (the install null_resources read them on subsequent applies)."
   type        = string
-  default     = "/tmp/f5-manifest"
+  default     = "/work/.bnk/scratch/f5-manifest"
 }
 
 # F5 Lifecycle Operator (FLO) Variables

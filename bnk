@@ -445,6 +445,32 @@ cmd_init() {
 
     write_user_gitignore
 
+    # Offer to wire up shell completion. Detects $SHELL; skips silently
+    # for unsupported shells. Default Yes; user can decline.
+    section "Shell completion"
+    local _sh="${SHELL##*/}"
+    case "$_sh" in
+        bash|zsh)
+            local _rc="$HOME/.${_sh}rc"
+            if [[ -f "$_rc" ]] && grep -qF "# === bnk completion ===" "$_rc"; then
+                ok "$_rc already sources bnk completion"
+            else
+                printf "  Detected %s. Add bnk tab-completion to %s? [Y/n]: " \
+                    "$_sh" "$_rc"
+                local _ans; read -r _ans
+                if [[ ! "$_ans" =~ ^[Nn] ]]; then
+                    install_shell_completion
+                else
+                    hint "skipped — install later with: bnk completion install"
+                fi
+            fi
+            ;;
+        *)
+            warn "shell '$_sh' not bash or zsh — skipping completion install"
+            hint "for bash/zsh users: bnk completion install"
+            ;;
+    esac
+
     section "Next steps"
     printf "  %sReview:%s  \$EDITOR terraform.tfvars\n" "$C_BOLD" "$C_OFF"
     printf "  %sPlan:%s    bnk plan\n"                  "$C_BOLD" "$C_OFF"
@@ -576,6 +602,23 @@ cmd_doctor() {
     else
         warn "terraform validate failed"
     fi
+
+    section "Shell completion"
+    local _sh="${SHELL##*/}"
+    case "$_sh" in
+        bash|zsh)
+            local _rc="$HOME/.${_sh}rc"
+            if [[ -f "$_rc" ]] && grep -qF "# === bnk completion ===" "$_rc"; then
+                ok "$_rc sources bnk completion"
+            else
+                warn "no bnk completion in $_rc"
+                hint "install: bnk completion install"
+            fi
+            ;;
+        *)
+            warn "shell '$_sh' not bash or zsh — completion install not supported"
+            ;;
+    esac
 
     section "Summary"
     if (( failures == 0 )); then
@@ -820,17 +863,55 @@ COMPLETION_EOF
     case "$shell" in
         bash) printf '%s\n' "$body" ;;
         zsh)  printf 'autoload -U +X bashcompinit && bashcompinit\n%s\n' "$body" ;;
+        install) install_shell_completion ;;
         *)
             cat >&2 <<'EOF'
-Usage: bnk completion <bash|zsh>
+Usage: bnk completion <bash|zsh>     # print script to stdout
+       bnk completion install        # detect shell, hook into rc file
 
 Bash:  source <(bnk completion bash)
-       (or persist: bnk completion bash >> ~/.bash_completion)
+       (or persist: bnk completion install)
 
 Zsh:   source <(bnk completion zsh)
 EOF
             exit 1 ;;
     esac
+}
+
+# Detect $SHELL, append a `source <(bnk completion ...)` block to the
+# user's rc file inside an idempotent marker. Re-running is a no-op
+# once installed. The guard `command -v bnk` keeps the rc file from
+# emitting "command not found" if bnk is later uninstalled.
+install_shell_completion() {
+    local sh rc
+    sh="${SHELL##*/}"
+    case "$sh" in
+        bash) rc="$HOME/.bashrc" ;;
+        zsh)  rc="$HOME/.zshrc"  ;;
+        *)
+            fail "shell '$sh' not bash or zsh (\$SHELL=$SHELL)"
+            hint "manually source: source <(bnk completion bash)"
+            return 1 ;;
+    esac
+
+    local marker_begin="# === bnk completion ==="
+    if [[ -f "$rc" ]] && grep -qF "$marker_begin" "$rc"; then
+        ok "$rc already sources bnk completion"
+        return 0
+    fi
+    {
+        [[ -f "$rc" && -s "$rc" ]] && printf '\n'
+        cat <<COMPLETION_BLOCK
+$marker_begin
+# Loads $sh completion for the bnk CLI. Managed by 'bnk completion
+# install' — remove this block to disable. The 'command -v bnk' guard
+# prevents 'command not found' noise if bnk is later removed.
+command -v bnk >/dev/null && source <(bnk completion $sh)
+# === end bnk completion ===
+COMPLETION_BLOCK
+    } >> "$rc"
+    ok "appended bnk completion to $rc"
+    hint "open a new shell, or run: source $rc"
 }
 
 # ── infra ───────────────────────────────────────────────────

@@ -112,6 +112,21 @@ tf() {
     docker_run terraform -chdir="$TF_PROJECT_DIR" "$sub" "$@"
 }
 
+# Lazy `terraform init` for the user's cwd. The image ships a
+# pre-warmed plugin cache at /opt/tf-project/.terraform-provider-cache
+# (TF_PLUGIN_CACHE_DIR is set in the image's ENV), so init creates
+# symlinks into the cache rather than downloading providers — fast
+# and offline. Skips when .terraform/providers is already present.
+ensure_tf_init() {
+    [[ -d "$(pwd)/.terraform/providers" ]] && return 0
+    printf "%sbnk: initialising terraform in $(pwd) (one-time)...%s\n" \
+        "$C_DIM" "$C_OFF" >&2
+    # docker_run_quiet (no -it) — init is fully non-interactive with
+    # -input=false and runs cleanly in CI / piped contexts too.
+    docker_run_quiet terraform -chdir="$TF_PROJECT_DIR" \
+        init -input=false -no-color >/dev/null
+}
+
 read_tfvar() {
     awk -F'"' "/^[[:space:]]*$1[[:space:]]*=/{print \$2; exit}" terraform.tfvars
 }
@@ -475,6 +490,7 @@ cmd_doctor() {
 # coloured plan output live; the summary is appended after.
 cmd_plan() {
     need_tfvars
+    ensure_tf_init
     docker_run bash -c '
         set -e
 
@@ -554,6 +570,7 @@ cmd_status() {
         esac
     done
     need_tfvars
+    [[ "$check_drift" == true ]] && ensure_tf_init
     docker_run bash -c '
         set +e
 
@@ -739,6 +756,7 @@ EOF
         init)    tf init "$@" ;;
         plan)    cmd_plan "$@" ;;
         apply)
+            ensure_tf_init
             # --auto is a bnk-only flag; everything else passes through.
             local auto=()
             local rest=()
@@ -749,8 +767,8 @@ EOF
             done
             tf apply "$STATE" "$VARFILE" "${auto[@]}" "${rest[@]}"
             ;;
-        destroy) tf destroy "$STATE" "$VARFILE" "$@" ;;
-        output)  tf output  "$STATE" "$@" ;;
+        destroy) ensure_tf_init; tf destroy "$STATE" "$VARFILE" "$@" ;;
+        output)  ensure_tf_init; tf output  "$STATE" "$@" ;;
         test)    docker_run /opt/tf-project/run_tests.sh "$@" ;;
         *) echo "bnk infra: unknown subcommand '$sub'" >&2; exit 1 ;;
     esac

@@ -1,33 +1,51 @@
-# Terraform state — may contain secrets
+# ─── Terraform ──────────────────────────────────────────────
+# State files may contain secrets and infra-specific identifiers.
 terraform.tfstate
 terraform.tfstate.backup
 *.tfstate
 *.tfstate.*
 
-# Terraform working directory
+# Per-project working directory (terraform init populates this).
 .terraform/
 .terraform.lock.hcl
 .terraform-provider-cache/
-remove_terraform_state
 
-# Environment files
+# tfvars contain the IBM Cloud API key and other secrets.
+terraform.tfvars
+terraform.tfvars.bak
+
+# `bnk plan` writes this short-lived plan file and removes it on
+# success; ignore so a crash mid-flow doesn't leak it into a commit.
+.bnk-plan.tfplan
+
+# ─── bnk runtime artifacts in cwd ───────────────────────────
+# When bnk runs, these land in the current directory because /work
+# is bind-mounted to $(pwd) and HOME is set to /work.
+.kube/
+.bluemix/
+.terraform.d/
+
+# `run_tests.sh` (= `bnk infra test`) output tree.
+test-runs/
+test-reports/
+
+# IBM Cloud provider kubeconfig downloads (cluster auth tokens).
+*_k8sconfig/
+
+# ─── Local environment / shell helpers ──────────────────────
 .env
 .env.*
 make_dot_envs.sh
 
-# run_tests.sh output trees
-test-runs/
-test-reports/
+# ─── Editors / IDEs ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
 
-# IBM Cloud provider kubeconfig downloads (contain cluster auth tokens)
-*_k8sconfig/
-
-# Variable files that contain secrets (API keys, passwords, etc.)
-terraform.tfvars
-
-# Claude Code session data
+# ─── Claude Code session data ───────────────────────────────
 .claude/
 
-# OS
+# ─── OS ─────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

@@ -132,14 +132,14 @@ variable "bigip_username" {
 variable "bigip_password" {
   description = "BIG-IP password for CIS controller login"
   type        = string
-  default     = ""
+  default     = "admin"
   sensitive   = true
 }
 
 variable "bigip_url" {
   description = "BIG-IP URL for CIS controller login"
   type        = string
-  default     = ""
+  default     = "https://192.168.1.245"
 }
 
 variable "create_roks_cluster" {

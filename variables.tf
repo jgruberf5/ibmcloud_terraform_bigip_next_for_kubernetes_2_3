@@ -226,14 +226,14 @@ variable "bigip_username" {
 variable "bigip_password" {
   description = "BIG-IP password for the CIS controller"
   type        = string
-  default     = ""
+  default     = "admin"
   sensitive   = true
 }
 
 variable "bigip_url" {
   description = "BIG-IP URL for the CIS controller"
   type        = string
-  default     = ""
+  default     = "192.168.1.245"
 }
 
 

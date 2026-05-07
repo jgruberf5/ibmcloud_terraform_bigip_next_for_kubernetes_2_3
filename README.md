@@ -48,7 +48,7 @@ docker image rm ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3
 ```
 
 Per-project state lives in each project's directory — to wipe a
-project, `cd` into it and run `bnk infra reset`.
+project, `cd` into it and run `bnk delete`.
 
 ---
 
@@ -87,6 +87,7 @@ tab completion.
 | `bnk plan`                    | `terraform plan` plus a module-grouped change summary (`+add ~chg -del ±rep`) |
 | `bnk apply [--auto]`          | `terraform apply` (interactive); `--auto` adds `-auto-approve` for CI |
 | `bnk destroy`                 | `terraform destroy` |
+| `bnk delete`                  | `rm -rf .bnk` after a typed confirmation — clears state and caches in cwd |
 | `bnk shell`                   | Interactive shell with kubeconfig + ibmcloud session in place |
 | `bnk kubectl …` / `oc …` / `ibmcloud …` | One-shot cluster commands |
 | `bnk completion <bash\|zsh>`  | Print completion script — `source <(./bnk completion bash)` |
@@ -94,7 +95,7 @@ tab completion.
 ### Subgroups
 
 ```
-bnk infra    init | plan | apply | destroy | output | test | reset
+bnk infra    init | plan | apply | destroy | delete | output | test
 bnk cluster  shell | kubectl | oc | ibmcloud | info
 bnk exec     <cmd...>     # arbitrary command inside the container
 ```
@@ -161,11 +162,12 @@ table by parsing the saved plan:
 summary line counts them as both, which is misleading. `data` reads are
 ignored.
 
-### `bnk infra reset`
+### `bnk delete`
 
-`rm -rf .bnk` after a typed `reset` confirmation — wipes terraform
+`rm -rf .bnk` after a typed `delete` confirmation — wipes terraform
 state, kubeconfig, ibmcloud session, plan files, and per-run test
-state in one stroke. `terraform.tfvars` is left alone. **If a cluster
+state in one stroke. `terraform.tfvars` is left alone. Available as
+both `bnk delete` (top-level) and `bnk infra delete`. **If a cluster
 is provisioned, run `bnk destroy` first** — otherwise the cluster
 keeps running but you lose the ability to manage it from here.
 
@@ -305,7 +307,7 @@ owns under a single `.bnk/` subdirectory. Your cwd looks like this:
 Run `bnk` from a per-project directory; don't share one cwd across
 unrelated deployments. Each directory is its own state.
 
-Wipe a project's state with `bnk infra reset` — prompts for
+Wipe a project's state with `bnk delete` — prompts for
 confirmation, then `rm -rf .bnk` (`terraform.tfvars` is left alone).
 
 The Terraform project itself — every `.tf` file, the modules, and the

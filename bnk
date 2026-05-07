@@ -16,11 +16,12 @@
 #   bnk plan                     terraform plan with module-grouped summary
 #   bnk apply [--auto]           terraform apply (--auto for non-interactive)
 #   bnk destroy                  terraform destroy
+#   bnk delete                   remove .bnk/ from cwd (after typed confirm)
 #   bnk shell                    interactive cluster shell (cloud-exec)
 #   bnk kubectl ... | oc ...     one-shot cluster commands
 #
 # Groups:
-#   bnk infra <init|plan|apply|destroy|output|test|reset>
+#   bnk infra <init|plan|apply|destroy|delete|output|test>
 #   bnk cluster <shell|kubectl|oc|ibmcloud|info>
 #   bnk exec <cmd...>            arbitrary command in container
 #
@@ -37,7 +38,7 @@
 #   bnk owns — tfstate, terraform's internals, kubeconfig, ibmcloud
 #   session, plan files, test runs — lives under .bnk/ in cwd. Run bnk
 #   from a per-project directory; don't share one cwd across unrelated
-#   deployments. Wipe a project with `bnk infra reset` (= `rm -rf .bnk`).
+#   deployments. Wipe a project with `bnk delete` (= `rm -rf .bnk`).
 # ============================================================
 set -euo pipefail
 
@@ -263,7 +264,7 @@ This will:
   2. Optionally remove the docker image '$IMAGE'
 
 Per-project state lives in each project's directory under .bnk/. To
-wipe a project's state, run 'bnk infra reset' inside that directory.
+wipe a project's state, run 'bnk delete' inside that directory.
 
 EOF
 
@@ -799,8 +800,8 @@ cmd_completion() {
     body=$(cat <<'COMPLETION_EOF'
 _bnk_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local top="init install uninstall doctor status infra cluster plan apply destroy output test reset kubectl oc ibmcloud shell exec completion help"
-    local infra_subs="init plan apply destroy output test reset help"
+    local top="init install uninstall doctor status infra cluster plan apply destroy delete output test kubectl oc ibmcloud shell exec completion help"
+    local infra_subs="init plan apply destroy delete output test help"
     local cluster_subs="shell kubectl oc ibmcloud info help"
     case "$COMP_CWORD" in
         1) COMPREPLY=( $(compgen -W "$top" -- "$cur") ) ;;
@@ -843,10 +844,10 @@ bnk infra <subcommand>
   destroy               terraform destroy
   output [name]         terraform output
   test [args...]        run the 4-scenario test harness (writes to ./test-runs/)
-  reset                 remove tfstate, .terraform, and auth caches in cwd
+  delete                remove .bnk/ from cwd (state, kubeconfig, session)
 EOF
             return 0 ;;
-        reset) cmd_reset; return $? ;;
+        delete) cmd_delete; return $? ;;
     esac
     need_tfvars
     # Standard flags every plan/apply/destroy needs: read state from
@@ -877,12 +878,12 @@ EOF
     esac
 }
 
-# ── reset ───────────────────────────────────────────────────
+# ── delete ──────────────────────────────────────────────────
 # Removes the .bnk/ directory in the cwd. terraform.tfvars is the only
 # bnk-relevant file outside .bnk/ and is left alone (user-edited input).
-cmd_reset() {
+cmd_delete() {
     if [[ ! -d "$BNK_DIR" ]]; then
-        echo "bnk infra reset: no $BNK_DIR/ in $(pwd) — nothing to do."
+        echo "bnk delete: no $BNK_DIR/ in $(pwd) — nothing to do."
         return 0
     fi
     cat <<EOF
@@ -902,9 +903,9 @@ first — otherwise the cluster will keep running but you will lose the
 ability to manage it from here.
 
 EOF
-    printf "Type 'reset' to confirm: "
+    printf "Type 'delete' to confirm: "
     local ans; read -r ans
-    if [[ "$ans" != "reset" ]]; then
+    if [[ "$ans" != "delete" ]]; then
         echo "aborted."
         return 1
     fi
@@ -956,7 +957,7 @@ case "$CMD" in
     cluster)              cmd_cluster "$@" ;;
 
     # Short aliases for the common flows — `bnk plan` → `bnk infra plan`.
-    plan|apply|destroy|output|test)
+    plan|apply|destroy|delete|output|test)
                           cmd_infra   "$CMD" "$@" ;;
     kubectl|oc|ibmcloud)  cmd_cluster "$CMD" "$@" ;;
     shell)                cmd_cluster shell "$@" ;;

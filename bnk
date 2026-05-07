@@ -247,6 +247,49 @@ EOF
     echo "✓ uninstalled."
 }
 
+# Drop a .gitignore in the user's cwd that protects them from
+# committing secrets and runtime caches. Idempotent: bracketed by a
+# marker so a re-run of `bnk init` skips the section if it's already
+# there. Users are free to add their own entries above the block.
+write_user_gitignore() {
+    local marker_begin="# === bnk runtime — do not commit ==="
+    local marker_end="# === end bnk ==="
+    if [[ -f .gitignore ]] && grep -qF "$marker_begin" .gitignore; then
+        ok ".gitignore already protects bnk runtime files"
+        return 0
+    fi
+    {
+        # Separate from any existing content so the block is readable.
+        [[ -f .gitignore && -s .gitignore ]] && printf '\n'
+        cat <<'GITIGNORE_BLOCK'
+# === bnk runtime — do not commit ===
+# `bnk init` wrote this section. These files contain secrets:
+#   - terraform.tfvars         your IBM Cloud API key
+#   - terraform.tfstate*       infra IDs, resource records
+#   - .kube/config             cluster admin token
+#   - .bluemix/                IBM Cloud session token
+# Committing them would expose your infrastructure. Add your own
+# ignores ABOVE this block; the next `bnk init` keeps this section
+# intact when it sees the marker.
+terraform.tfvars
+terraform.tfvars.bak
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+.terraform.d/
+.kube/
+.bluemix/
+.bnk-plan.tfplan
+test-runs/
+# === end bnk ===
+GITIGNORE_BLOCK
+    } >> .gitignore
+    ok ".gitignore written (protects tfvars, tfstate, .kube, .bluemix)"
+}
+
 # ── init wizard ─────────────────────────────────────────────
 # Interactive tfvars builder. Runs on the host, prompts for the
 # variables most likely to need overrides, validates the API key
@@ -354,6 +397,8 @@ cmd_init() {
 
     chmod 600 terraform.tfvars
     ok "terraform.tfvars written ($(wc -l < terraform.tfvars) lines, all variables included)"
+
+    write_user_gitignore
 
     section "Next steps"
     printf "  %sReview:%s  \$EDITOR terraform.tfvars\n" "$C_BOLD" "$C_OFF"

@@ -80,17 +80,30 @@ export IBMCLOUD_VERSION_CHECK="${IBMCLOUD_VERSION_CHECK:-false}"
 # config are installed under /opt/ibmcloud-template/.bluemix in the
 # Dockerfile (world-readable).
 #
-# Per-item, not `cp -rn ... /. ...`: busybox cp's -n on a directory
-# source bails out entirely when the destination dir already exists
-# (vs GNU cp's per-file no-clobber). Test each item ourselves so
-# missing pieces fill in without touching anything the user already
-# has — login may have updated config.json with creds.
+# Per-item rather than `cp -rn ... /. ...`: busybox cp's -n on a
+# directory source bails out when the destination dir already exists
+# (vs GNU cp's per-file no-clobber).
+#
+# Plugins need per-plugin checks: `ibmcloud login` initialises
+# .bluemix/plugins/ on first call with an empty manifest
+# (`Plugins: {}`), so plugins/ exists but contains no actual plugins.
+# A check on plugins/ alone would skip the copy and leave
+# `ibmcloud ks` reporting "not registered". When any expected
+# plugin subdir is missing, re-seed both the manifest (config.json
+# inside plugins/, lists the installed plugins) and the subdir
+# itself — they have to stay in sync.
 if [[ -d /opt/ibmcloud-template/.bluemix ]]; then
-    mkdir -p "$WORK_DIR/.bnk/.bluemix"
-    [[ -e "$WORK_DIR/.bnk/.bluemix/plugins" ]] \
-        || cp -r /opt/ibmcloud-template/.bluemix/plugins "$WORK_DIR/.bnk/.bluemix/plugins"
+    mkdir -p "$WORK_DIR/.bnk/.bluemix/plugins"
     [[ -e "$WORK_DIR/.bnk/.bluemix/config.json" ]] \
         || cp /opt/ibmcloud-template/.bluemix/config.json "$WORK_DIR/.bnk/.bluemix/config.json"
+    for plug in container-service vpc-infrastructure; do
+        if [[ ! -d "$WORK_DIR/.bnk/.bluemix/plugins/$plug" ]]; then
+            cp /opt/ibmcloud-template/.bluemix/plugins/config.json \
+               "$WORK_DIR/.bnk/.bluemix/plugins/config.json"
+            cp -r "/opt/ibmcloud-template/.bluemix/plugins/$plug" \
+                  "$WORK_DIR/.bnk/.bluemix/plugins/$plug"
+        fi
+    done
 fi
 
 # Pre-create the per-module kubeconfig dirs. ibm_container_cluster_config

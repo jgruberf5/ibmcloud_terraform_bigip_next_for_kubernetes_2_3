@@ -35,9 +35,27 @@ read_tfvar() {
     awk -F'"' "/^[[:space:]]*$key[[:space:]]*=/{print \$2; exit}" "$file"
 }
 
+# Resolve the IBM Cloud API key from any of the conventional env vars
+# users (or their CI runners) set, with terraform.tfvars as the final
+# fallback. Whichever is found is exported as IBMCLOUD_API_KEY so
+# `ibmcloud login`, cloud-exec, and the IBM terraform provider all
+# pick it up uniformly.
 if [[ -z "${IBMCLOUD_API_KEY:-}" ]]; then
-    export IBMCLOUD_API_KEY="${TF_VAR_ibmcloud_api_key:-$(read_tfvar ibmcloud_api_key "$TFVARS")}"
+    for _v in IC_API_KEY \
+              TF_VAR_ibmcloud_api_key \
+              TF_VAR_IBMCLOUD_API_KEY \
+              TF_VAR_IC_API_KEY; do
+        if [[ -n "${!_v:-}" ]]; then
+            export IBMCLOUD_API_KEY="${!_v}"
+            break
+        fi
+    done
+    unset _v
 fi
+if [[ -z "${IBMCLOUD_API_KEY:-}" ]]; then
+    export IBMCLOUD_API_KEY="$(read_tfvar ibmcloud_api_key "$TFVARS")"
+fi
+
 if [[ -z "${IBMCLOUD_REGION:-}" ]]; then
     export IBMCLOUD_REGION="${TF_VAR_ibmcloud_cluster_region:-$(read_tfvar ibmcloud_cluster_region "$TFVARS")}"
 fi

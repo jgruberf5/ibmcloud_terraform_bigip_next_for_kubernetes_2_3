@@ -103,6 +103,43 @@ docker_args=(
     -e TF_DATA_DIR=/work/.bnk/terraform
     -e KUBECONFIG=/work/.bnk/.kube/config
 )
+
+# Forward IBM Cloud credentials and region from host env into the
+# container if the user has them set. Lets users skip the API key in
+# terraform.tfvars when their shell already has it (CI runners,
+# personal dev setups, `ibmcloud login` sessions, etc.). Order is
+# informational — the entrypoint normalises whichever is set into
+# IBMCLOUD_API_KEY before exec'ing the user's command.
+BNK_ENV_PASSTHROUGH=(
+    IBMCLOUD_API_KEY
+    IC_API_KEY
+    IBMCLOUD_REGION
+    TF_VAR_ibmcloud_api_key
+    TF_VAR_ibmcloud_cluster_region
+    TF_VAR_IBMCLOUD_API_KEY
+    TF_VAR_IC_API_KEY
+)
+for _v in "${BNK_ENV_PASSTHROUGH[@]}"; do
+    if [[ -n "${!_v:-}" ]]; then
+        docker_args+=(-e "$_v=${!_v}")
+    fi
+done
+unset _v
+
+# First non-empty env var from BNK_ENV_PASSTHROUGH that holds an API
+# key (region vars get filtered). Returns "" if nothing is set.
+host_api_key() {
+    local v
+    for v in IBMCLOUD_API_KEY IC_API_KEY \
+             TF_VAR_ibmcloud_api_key \
+             TF_VAR_IBMCLOUD_API_KEY TF_VAR_IC_API_KEY; do
+        if [[ -n "${!v:-}" ]]; then
+            printf '%s\t%s' "${!v}" "$v"
+            return
+        fi
+    done
+}
+
 ensure_workspace() {
     mkdir -p "$BNK_DIR"
 }
@@ -318,8 +355,24 @@ cmd_init() {
         printf -v "$var" "%s" "$input"
     }
 
-    ask "IBM Cloud API key"        ""                     api_key  secret
-    [[ -z "$api_key" ]] && { fail "API key is required"; return 1; }
+    # If the user already has an API key in their env, skip the prompt
+    # (with confirmation). Saves typing and reduces the chance of a
+    # mistyped paste.
+    local _hk _hk_var
+    _hk=$(host_api_key)
+    if [[ -n "$_hk" ]]; then
+        _hk_var="${_hk#*	}"
+        printf "  IBM Cloud API key found in \$%s (%d chars). Use it? [Y/n]: " \
+            "$_hk_var" "$(( ${#_hk} - ${#_hk_var} - 1 ))"
+        local _ans; read -r _ans
+        if [[ ! "$_ans" =~ ^[Nn] ]]; then
+            api_key="${_hk%	*}"
+        fi
+    fi
+    if [[ -z "$api_key" ]]; then
+        ask "IBM Cloud API key"    ""                     api_key  secret
+        [[ -z "$api_key" ]] && { fail "API key is required"; return 1; }
+    fi
     ask "Region"                   "ca-tor"               region
     ask "Resource group"           "default"              rg
     ask "Create new ROKS cluster"  "y"                    create_roks
@@ -456,13 +509,28 @@ cmd_doctor() {
         printf "\n%s%d check(s) failed.%s\n" "$C_FAIL" "$failures" "$C_OFF"
         return 1
     fi
-    local api_key region
+    local api_key api_key_source region
     api_key=$(read_tfvar ibmcloud_api_key)
+    api_key_source="terraform.tfvars"
     region=$(read_tfvar ibmcloud_cluster_region)
+
+    # If tfvars doesn't have the key (or has a placeholder), try host
+    # env vars before failing — bnk forwards these into the container.
+    if [[ -z "$api_key" || "$api_key" == "YOUR_"* || "$api_key" == "REPLACE_ME"* ]]; then
+        local _hk
+        _hk=$(host_api_key)
+        if [[ -n "$_hk" ]]; then
+            api_key="${_hk%	*}"
+            api_key_source="\$${_hk#*	}"
+        fi
+    fi
+
     if [[ -n "$api_key" && "$api_key" != "YOUR_"* && "$api_key" != "REPLACE_ME"* ]]; then
-        ok "ibmcloud_api_key set (${#api_key} chars)"
+        ok "ibmcloud_api_key set (${#api_key} chars from $api_key_source)"
     else
-        fail "ibmcloud_api_key missing or still a placeholder"
+        fail "ibmcloud_api_key not in tfvars and no env var set"
+        hint "set one of: IBMCLOUD_API_KEY, IC_API_KEY, TF_VAR_ibmcloud_api_key"
+        hint "  or run: bnk init"
         failures=$((failures+1))
     fi
     if [[ -n "$region" ]]; then

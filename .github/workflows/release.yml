@@ -74,9 +74,14 @@ jobs:
   smoke-test:
     needs: build-and-push
     runs-on: ubuntu-latest
-    env:
-      IMAGE: ghcr.io/${{ needs.build-and-push.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.tag }}
     steps:
+      # Compute the full image ref into $GITHUB_ENV so every step
+      # below can reference $IMAGE. Job-level `env:` cannot use the
+      # `env` context for workflow-level vars, so we hop through here.
+      - name: Compute IMAGE ref
+        run: |
+          echo "IMAGE=ghcr.io/${{ needs.build-and-push.outputs.owner }}/$IMAGE_NAME:${{ needs.build-and-push.outputs.tag }}" >> "$GITHUB_ENV"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

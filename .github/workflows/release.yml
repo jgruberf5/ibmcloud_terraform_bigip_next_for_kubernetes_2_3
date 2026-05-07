@@ -28,7 +28,8 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.tag.outputs.value }}
+      tag:   ${{ steps.tag.outputs.value }}
+      owner: ${{ steps.owner.outputs.value }}
     steps:
       - name: Resolve target tag
         id: tag
@@ -70,8 +71,92 @@ jobs:
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
-  bump-install-url:
+  smoke-test:
     needs: build-and-push
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ needs.build-and-push.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.tag }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull just-published image
+        run: docker pull "$IMAGE"
+
+      - name: bnk help renders
+        run: docker run --rm "$IMAGE" bnk help | grep -q "bnk init"
+
+      - name: bnk completion bash generates
+        run: docker run --rm "$IMAGE" bnk completion bash | grep -q _bnk_complete
+
+      - name: every expected CLI is present in PATH
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            for c in terraform kubectl oc helm jq ibmcloud python3 awk grep cloud-exec bnk; do
+              command -v "$c" >/dev/null || { echo "missing: $c"; exit 1; }
+              echo "  ok: $c"
+            done
+          '
+
+      - name: terraform validate against the in-image project
+        run: |
+          docker run --rm --entrypoint "" "$IMAGE" \
+            sh -c 'TF_DATA_DIR=/opt/tf-project/.terraform terraform -chdir=/opt/tf-project validate -no-color'
+
+      - name: bnk doctor with stub tfvars fails at IBM Cloud login (expected)
+        run: |
+          set +e
+          mkdir -p /tmp/smoke
+          cat > /tmp/smoke/terraform.tfvars <<'TFVARS'
+          ibmcloud_api_key = "STUB-INVALID-KEY-FOR-CI"
+          ibmcloud_cluster_region = "ca-tor"
+          TFVARS
+          docker run --rm \
+              -u "$(id -u):$(id -g)" \
+              -v /tmp/smoke:/work \
+              "$IMAGE" bnk doctor 2>&1 | tee /tmp/doctor.log
+          rc=${PIPESTATUS[0]}
+          # We expect doctor to exit non-zero (login probe should fail
+          # against the stub key). Any other outcome is a regression.
+          if (( rc == 0 )); then
+            echo "::error::bnk doctor unexpectedly succeeded with a stub API key"
+            exit 1
+          fi
+          grep -q "ibmcloud login failed" /tmp/doctor.log || {
+            echo "::error::doctor should report 'ibmcloud login failed' on a stub key"
+            exit 1
+          }
+          # And the host-side checks must have all passed before the probe
+          grep -q "current directory writable" /tmp/doctor.log || {
+            echo "::error::doctor's host-environment section regressed"
+            exit 1
+          }
+
+      - name: airgap install path produces a working bnk
+        run: |
+          mkdir -p /tmp/airgap
+          docker run --rm -v /tmp/airgap:/dest "$IMAGE" bnk install
+          test -x /tmp/airgap/bnk
+          /tmp/airgap/bnk help | grep -q "bnk init"
+
+      - name: curl install path produces a working bnk
+        env:
+          TAG: ${{ needs.build-and-push.outputs.tag }}
+        run: |
+          mkdir -p /tmp/curl-install
+          # The release was just published, so /raw/<tag>/install.sh is live.
+          # Pin BNK_VERSION so the script downloads the matching bnk
+          # rather than re-querying the GitHub API for "latest".
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${TAG}/install.sh" \
+              | INSTALL_DIR=/tmp/curl-install BNK_VERSION="${TAG}" bash
+          test -x /tmp/curl-install/bnk
+          /tmp/curl-install/bnk help | grep -q "bnk init"
+
+  bump-install-url:
+    needs: [build-and-push, smoke-test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

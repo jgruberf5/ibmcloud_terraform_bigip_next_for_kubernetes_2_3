@@ -1,0 +1,75 @@
+name: Lint
+
+# Pre-merge sanity: bash syntax, YAML parse, terraform fmt, terraform
+# validate. Catches regressions before they reach a release branch.
+# Cheap (<2 min total) — runs on every push and PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n every shell script
+        run: |
+          set -e
+          fail=0
+          for f in bnk install.sh setup_ghcr.sh cloud-exec \
+                   docker-entrypoint.sh run_tests.sh \
+                   remove_cert_manager_crds.sh; do
+            [[ -f "$f" ]] || continue
+            if bash -n "$f"; then
+              echo "  ok: $f"
+            else
+              echo "::error file=$f::bash -n failed"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: shellcheck (advisory — won't fail the build on style)
+        continue-on-error: true
+        run: |
+          sudo apt-get -qq install -y shellcheck
+          for f in bnk install.sh setup_ghcr.sh cloud-exec \
+                   docker-entrypoint.sh run_tests.sh \
+                   remove_cert_manager_crds.sh; do
+            [[ -f "$f" ]] || continue
+            shellcheck --severity=warning --shell=bash "$f" || true
+          done
+
+  yaml-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: validate every workflow YAML
+        run: |
+          set -e
+          for f in .github/workflows/*.yml; do
+            python3 -c "import sys, yaml; yaml.safe_load(open('$f'))"
+            echo "  ok: $f"
+          done
+
+  terraform-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: terraform fmt -check (recursive)
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (root + all modules via module graph)
+        run: |
+          terraform init -backend=false -input=false -no-color
+          terraform validate -no-color

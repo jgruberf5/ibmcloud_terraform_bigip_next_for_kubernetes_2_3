@@ -337,7 +337,10 @@ cmd_init() {
 
     section "bnk init — interactive tfvars wizard"
 
-    local api_key region rg create_roks cluster_name workers ocp_ver
+    # api_key initialised so the [[ -z "$api_key" ]] check below is safe
+    # under `set -u` when no env var is present and the host_api_key
+    # branch doesn't run. The other vars are unconditionally set by ask().
+    local api_key="" region rg create_roks cluster_name workers ocp_ver
 
     # Prompt with default; pass "secret" as 4th arg to suppress echo.
     # `mode=${4:-}` lets callers omit the 4th arg under `set -u`.

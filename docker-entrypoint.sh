@@ -67,6 +67,15 @@ export IBMCLOUD_REGION
 # share the same kubeconfig location.
 export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.bnk/.kube/config}"
 
+# Pre-create the per-module kubeconfig dirs. ibm_container_cluster_config
+# expects config_dir to exist (it does NOT MkdirAll) and emits "Path:
+# <dir>, to download the config doesn't exist" otherwise. Module names
+# mirror the TF layout in modules/{cert_manager,cne_instance,flo,license}/
+# providers.tf — var.kubeconfig_dir defaults match these paths. Belt-
+# and-suspenders alongside bnk's ensure_workspace so non-bnk users
+# (e.g. running the image directly) get the dirs too.
+mkdir -p "$WORK_DIR/.bnk/scratch/kubeconfig"/{cert_manager,cne_instance,flo,license}
+
 cd "$WORK_DIR" 2>/dev/null || true
 
 exec "$@"

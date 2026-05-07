@@ -144,6 +144,14 @@ host_api_key() {
 
 ensure_workspace() {
     mkdir -p "$BNK_DIR"
+    # Pre-create the per-module kubeconfig dirs that
+    # ibm_container_cluster_config writes into. The IBM provider checks
+    # the dir already exists (it does NOT MkdirAll), so missing dirs
+    # produce: "Path: /work/.bnk/scratch/kubeconfig/<m>, to download
+    # the config doesn't exist". Module names mirror the TF layout in
+    # modules/{cert_manager,cne_instance,flo,license}/providers.tf —
+    # var.kubeconfig_dir defaults match these paths.
+    mkdir -p "$BNK_DIR/scratch/kubeconfig"/{cert_manager,cne_instance,flo,license}
 }
 docker_run() {
     ensure_image

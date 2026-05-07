@@ -33,10 +33,11 @@
 #
 # State model:
 #   The current directory is bind-mounted at /work inside the container.
-#   terraform.tfvars (input) and terraform.tfstate, .terraform/, .kube/,
-#   .bluemix/, test-runs/ (outputs and caches) all live in $(pwd) on the
-#   host. Run bnk from a per-project directory; don't share one cwd
-#   across unrelated deployments.
+#   terraform.tfvars (your input) sits at the top of cwd; everything
+#   bnk owns — tfstate, terraform's internals, kubeconfig, ibmcloud
+#   session, plan files, test runs — lives under .bnk/ in cwd. Run bnk
+#   from a per-project directory; don't share one cwd across unrelated
+#   deployments. Wipe a project with `bnk infra reset` (= `rm -rf .bnk`).
 # ============================================================
 set -euo pipefail
 
@@ -46,6 +47,12 @@ IMAGE="${IMAGE:-ghcr.io/jgruberf5/ibmcloud-terraform-bnk-2-3:latest}"
 # use -chdir=$TF_PROJECT_DIR so they read .tf files from here, while
 # state, var-file, and TF_DATA_DIR all point at /work (host cwd).
 TF_PROJECT_DIR=/opt/tf-project
+
+# bnk's working subdirectory inside the user's cwd. Everything bnk
+# owns — terraform state, .terraform internals, kubeconfig, ibmcloud
+# session, plan files, test runs — lives under here so the user's cwd
+# stays clean. One ignore pattern (`.bnk/`) covers all of it.
+BNK_DIR=.bnk
 
 # ── tty / color helpers ─────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -79,28 +86,35 @@ ensure_image() {
 }
 
 # Common docker run args:
-#   --user $UID:$GID       so files written to /work land owned by the
+#   --user $UID:$GID       files written to /work land owned by the
 #                          host user (without this, root-in-container
 #                          writes root-owned files in the host cwd)
-#   -v $(pwd):/work        the host cwd IS /work — terraform.tfvars,
-#                          tfstate, .terraform/, .kube/, .bluemix/ all
-#                          live here on the host
-#   -e HOME=/work          ibmcloud (.bluemix) and kubectl (.kube)
-#                          drop their caches under /work
-#   -e TF_DATA_DIR=...     keep .terraform/ in /work, not /opt/tf-project
+#   -v $(pwd):/work        host cwd is /work — terraform.tfvars sits
+#                          at /work, everything else under /work/.bnk
+#   -e HOME=/work/.bnk     ibmcloud (.bluemix) and kubectl ($HOME/.kube)
+#                          drop their caches under .bnk by default
+#   -e TF_DATA_DIR=...     terraform's working dir lives at .bnk/terraform
+#   -e KUBECONFIG=...      pinned so cloud-exec and bnk agree on the
+#                          path even when HOME isn't read
 docker_args=(
     --user "$(id -u):$(id -g)"
     -v "$(pwd):/work"
-    -e HOME=/work
-    -e TF_DATA_DIR=/work/.terraform
+    -e HOME=/work/.bnk
+    -e TF_DATA_DIR=/work/.bnk/terraform
+    -e KUBECONFIG=/work/.bnk/.kube/config
 )
+ensure_workspace() {
+    mkdir -p "$BNK_DIR"
+}
 docker_run() {
     ensure_image
+    ensure_workspace
     docker run -it --rm "${docker_args[@]}" "$IMAGE" "$@"
 }
 # Non-interactive variant for probes — no -it, no stdin attached.
 docker_run_quiet() {
     ensure_image
+    ensure_workspace
     docker run --rm "${docker_args[@]}" "$IMAGE" "$@"
 }
 
@@ -118,8 +132,8 @@ tf() {
 # symlinks into the cache rather than downloading providers — fast
 # and offline. Skips when .terraform/providers is already present.
 ensure_tf_init() {
-    [[ -d "$(pwd)/.terraform/providers" ]] && return 0
-    printf "%sbnk: initialising terraform in $(pwd) (one-time)...%s\n" \
+    [[ -d "$(pwd)/$BNK_DIR/terraform/providers" ]] && return 0
+    printf "%sbnk: initialising terraform in $(pwd)/.bnk (one-time)...%s\n" \
         "$C_DIM" "$C_OFF" >&2
     # docker_run_quiet (no -it) — init is fully non-interactive with
     # -input=false and runs cleanly in CI / piped contexts too.
@@ -210,12 +224,9 @@ cmd_uninstall() {
 This will:
   1. Remove bnk from $self
   2. Optionally remove the docker image '$IMAGE'
-  3. Optionally remove the legacy 'bnk-state' docker volume (only
-     present if you used a pre-cwd-bind version of bnk)
 
-Per-project state lives in each project's directory now, not in a
-shared docker volume. To wipe a project's state, run 'bnk infra reset'
-inside that project's directory first.
+Per-project state lives in each project's directory under .bnk/. To
+wipe a project's state, run 'bnk infra reset' inside that directory.
 
 EOF
 
@@ -223,15 +234,6 @@ EOF
     printf "Remove bnk from %s? [y/N]: " "$self"
     read -r ans
     [[ "$ans" =~ ^[Yy] ]] || { echo "aborted."; return 1; }
-
-    if docker volume inspect bnk-state >/dev/null 2>&1; then
-        printf "Also remove the legacy 'bnk-state' docker volume? [y/N]: "
-        read -r ans
-        if [[ "$ans" =~ ^[Yy] ]]; then
-            docker volume rm bnk-state >/dev/null && ok "removed volume bnk-state" \
-                || warn "could not remove volume bnk-state"
-        fi
-    fi
 
     printf "Also remove docker image %s? [y/N]: " "$IMAGE"
     read -r ans
@@ -264,26 +266,14 @@ write_user_gitignore() {
         cat <<'GITIGNORE_BLOCK'
 # === bnk runtime — do not commit ===
 # `bnk init` wrote this section. These files contain secrets:
-#   - terraform.tfvars         your IBM Cloud API key
-#   - terraform.tfstate*       infra IDs, resource records
-#   - .kube/config             cluster admin token
-#   - .bluemix/                IBM Cloud session token
+#   - terraform.tfvars   your IBM Cloud API key
+#   - .bnk/              terraform state, kubeconfig, ibmcloud session
 # Committing them would expose your infrastructure. Add your own
 # ignores ABOVE this block; the next `bnk init` keeps this section
 # intact when it sees the marker.
 terraform.tfvars
 terraform.tfvars.bak
-terraform.tfstate
-terraform.tfstate.backup
-*.tfstate
-*.tfstate.*
-.terraform/
-.terraform.lock.hcl
-.terraform.d/
-.kube/
-.bluemix/
-.bnk-plan.tfplan
-test-runs/
+.bnk/
 # === end bnk ===
 GITIGNORE_BLOCK
     } >> .gitignore
@@ -497,7 +487,7 @@ cmd_doctor() {
         echo "IBM_LOGIN=$?"
         # Validate against the image-baked .terraform (pre-warmed by
         # `terraform init` at build time) — not against TF_DATA_DIR
-        # which points at /work/.terraform and is empty on a fresh
+        # which points at /work/.bnk/terraform and is empty on a fresh
         # project dir.
         TF_DATA_DIR=/opt/tf-project/.terraform \
             terraform -chdir=/opt/tf-project validate -no-color >/dev/null 2>&1
@@ -585,9 +575,9 @@ cmd_plan() {
                 "${totals[del]:-0}" "${totals[rep]:-0}" "$OFF"
         }
 
-        plan_file=/work/.bnk-plan.tfplan
+        plan_file=/work/.bnk/plan.tfplan
         terraform -chdir=/opt/tf-project plan \
-            -state=/work/terraform.tfstate \
+            -state=/work/.bnk/terraform.tfstate \
             -var-file=/work/terraform.tfvars \
             -out="$plan_file" "$@"
         terraform -chdir=/opt/tf-project show -no-color "$plan_file" | summarize
@@ -661,10 +651,10 @@ cmd_status() {
         [[ -n "$ACCT" ]] && kv account "$ACCT"
 
         section "Terraform"
-        if [[ -f /work/terraform.tfstate ]]; then
+        if [[ -f /work/.bnk/terraform.tfstate ]]; then
             N=$(terraform -chdir=/opt/tf-project state list \
-                    -state=/work/terraform.tfstate 2>/dev/null | wc -l)
-            MTIME=$(stat -c %Y /work/terraform.tfstate)
+                    -state=/work/.bnk/terraform.tfstate 2>/dev/null | wc -l)
+            MTIME=$(stat -c %Y /work/.bnk/terraform.tfstate)
             AGE_MIN=$(( ( $(date +%s) - MTIME ) / 60 ))
             if   (( AGE_MIN <   60 )); then AGE="${AGE_MIN}m"
             elif (( AGE_MIN < 1440 )); then AGE="$((AGE_MIN/60))h"
@@ -675,7 +665,7 @@ cmd_status() {
                 printf "  %schecking drift...%s\r" "$DIM" "$OFF" >&2
                 terraform -chdir=/opt/tf-project plan -refresh-only -detailed-exitcode \
                     -input=false -no-color -lock=false \
-                    -state=/work/terraform.tfstate \
+                    -state=/work/.bnk/terraform.tfstate \
                     -var-file=/work/terraform.tfvars \
                     >/dev/null 2>&1
                 DRIFT_RC=$?
@@ -792,10 +782,10 @@ EOF
     esac
     need_tfvars
     # Standard flags every plan/apply/destroy needs: read state from
-    # /work/terraform.tfstate (host cwd), read inputs from
-    # /work/terraform.tfvars (host cwd). -chdir points terraform at the
+    # /work/.bnk/terraform.tfstate (cwd/.bnk), read inputs from
+    # /work/terraform.tfvars (cwd root). -chdir points terraform at the
     # in-image project tree.
-    local STATE=-state=/work/terraform.tfstate
+    local STATE=-state=/work/.bnk/terraform.tfstate
     local VARFILE=-var-file=/work/terraform.tfvars
     case "$sub" in
         init)    tf init "$@" ;;
@@ -820,35 +810,22 @@ EOF
 }
 
 # ── reset ───────────────────────────────────────────────────
-# Removes the bnk-created files in the current directory:
-# terraform.tfstate*, .terraform/, .kube/, .bluemix/. Leaves
-# terraform.tfvars alone (user-edited input). Host-side operation.
+# Removes the .bnk/ directory in the cwd. terraform.tfvars is the only
+# bnk-relevant file outside .bnk/ and is left alone (user-edited input).
 cmd_reset() {
-    local targets=(
-        terraform.tfstate
-        terraform.tfstate.backup
-        .terraform
-        .terraform.lock.hcl
-        .kube
-        .bluemix
-    )
-    local present=()
-    for t in "${targets[@]}"; do
-        [[ -e "$t" ]] && present+=("$t")
-    done
-    if (( ${#present[@]} == 0 )); then
-        echo "bnk infra reset: nothing to remove in $(pwd)."
+    if [[ ! -d "$BNK_DIR" ]]; then
+        echo "bnk infra reset: no $BNK_DIR/ in $(pwd) — nothing to do."
         return 0
     fi
     cat <<EOF
 
-This will permanently delete the following from $(pwd):
+This will permanently delete $(pwd)/$BNK_DIR/, which holds:
 
-EOF
-    for t in "${present[@]}"; do
-        printf "  %s\n" "$t"
-    done
-    cat <<EOF
+  - terraform.tfstate                 (cluster + VPC + TGW records)
+  - terraform/ (TF_DATA_DIR)          (provider links, module cache)
+  - .kube/config                      (cluster admin kubeconfig)
+  - .bluemix/                         (ibmcloud session and plugins)
+  - test-runs/                        (per-run state from 'bnk infra test')
 
 terraform.tfvars is left alone.
 
@@ -863,8 +840,8 @@ EOF
         echo "aborted."
         return 1
     fi
-    rm -rf "${present[@]}"
-    ok "removed: ${present[*]}"
+    rm -rf "$BNK_DIR"
+    ok "removed $BNK_DIR/"
 }
 
 # ── cluster ─────────────────────────────────────────────────

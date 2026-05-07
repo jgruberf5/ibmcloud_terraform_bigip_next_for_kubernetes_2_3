@@ -93,7 +93,7 @@ done
 SELECTED_IDS=("${DEDUPED[@]}"); unset _SEEN _x DEDUPED
 
 # ── Run directory ────────────────────────────────────────────
-[[ -z "$RUN_DIR" ]] && RUN_DIR="$WORK_DIR/test-runs/$RUN_TS"
+[[ -z "$RUN_DIR" ]] && RUN_DIR="$WORK_DIR/.bnk/test-runs/$RUN_TS"
 mkdir -p "$RUN_DIR"
 SUMMARY_LOG="$RUN_DIR/summary.log"
 

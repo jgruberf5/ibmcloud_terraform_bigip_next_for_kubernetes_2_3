@@ -44,8 +44,10 @@ fi
 : "${IBMCLOUD_REGION:=ca-tor}"
 export IBMCLOUD_REGION
 
-export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.kube/config}"
-mkdir -p "$(dirname "$KUBECONFIG")" 2>/dev/null || true
+# bnk passes KUBECONFIG explicitly via -e. For users running the image
+# directly, default to the .bnk-aware path so cloud-exec and kubectl
+# share the same kubeconfig location.
+export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.bnk/.kube/config}"
 
 cd "$WORK_DIR" 2>/dev/null || true
 

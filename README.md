@@ -163,12 +163,11 @@ ignored.
 
 ### `bnk infra reset`
 
-Removes the bnk-created files in the current directory:
-`terraform.tfstate*`, `.terraform/`, `.terraform.lock.hcl`, `.kube/`,
-`.bluemix/`. Leaves `terraform.tfvars` alone. Prompts for confirmation
-(type `reset`). **If a cluster is provisioned, run `bnk destroy`
-first** — otherwise the cluster keeps running but you lose the ability
-to manage it from here.
+`rm -rf .bnk` after a typed `reset` confirmation — wipes terraform
+state, kubeconfig, ibmcloud session, plan files, and per-run test
+state in one stroke. `terraform.tfvars` is left alone. **If a cluster
+is provisioned, run `bnk destroy` first** — otherwise the cluster
+keeps running but you lose the ability to manage it from here.
 
 ### Tab completion
 
@@ -286,29 +285,32 @@ newer image (delete `./.terraform/` or run `bnk infra init`).
 ### State persistence — the current directory
 
 `bnk` bind-mounts your current directory at `/work` inside the
-container, runs as the host UID/GID, and points terraform's data
-directory and HOME at `/work` too. Every mutable artifact lives in
-`$(pwd)` on the host:
+container, runs as the host UID/GID, and consolidates everything bnk
+owns under a single `.bnk/` subdirectory. Your cwd looks like this:
 
-| Path in cwd                                      | Contents |
-|--------------------------------------------------|----------|
-| `terraform.tfvars`                               | your inputs (you create this with `bnk init`) |
-| `terraform.tfstate` / `terraform.tfstate.backup` | root-module state |
-| `.terraform/`                                    | provider links and module cache |
-| `.terraform.lock.hcl`                            | provider checksums |
-| `.kube/config` (+ `.cluster-id`)                 | cached kubeconfig and the cluster id it belongs to |
-| `.bluemix/`                                      | `ibmcloud` session token and installed plugins |
-| `test-runs/<timestamp>/`                         | per-run logs and isolated state from `bnk infra test` |
+```
+~/myproject/
+├── terraform.tfvars       your input
+├── .gitignore             written by `bnk init` to protect secrets
+└── .bnk/                  everything bnk owns (one dir, one ignore)
+    ├── terraform.tfstate  root-module state
+    ├── terraform.tfstate.backup
+    ├── terraform/         TF_DATA_DIR — provider links, module cache
+    ├── plan.tfplan        short-lived; removed by `bnk plan`
+    ├── .kube/config       cluster admin kubeconfig (+ `.cluster-id`)
+    ├── .bluemix/          ibmcloud session token + plugins
+    └── test-runs/<ts>/    per-run state from `bnk infra test`
+```
 
 Run `bnk` from a per-project directory; don't share one cwd across
 unrelated deployments. Each directory is its own state.
 
-Wipe a project's state with `bnk infra reset` (prompts for confirmation;
-removes the files above but leaves `terraform.tfvars` intact).
+Wipe a project's state with `bnk infra reset` — prompts for
+confirmation, then `rm -rf .bnk` (`terraform.tfvars` is left alone).
 
-The Terraform project itself (every `.tf` file, the modules, and the
-pre-warmed provider cache) lives at `/opt/tf-project` inside the image
-and is read-only — `bnk` reaches into it via
+The Terraform project itself — every `.tf` file, the modules, and the
+pre-warmed provider cache — lives at `/opt/tf-project` inside the
+image and is read-only. `bnk` reaches into it via
 `terraform -chdir=/opt/tf-project`.
 
 ### Credentials and inputs
@@ -351,13 +353,14 @@ caches live in the same volume, so warm containers stay authenticated.
 
 ## State
 
-State is held in **standard Terraform state files** in the docker volume
-at `/work/terraform.tfstate` (and `terraform.tfstate.backup`). Every
-resource across every phase lives in this single state file.
+State is held in a **standard Terraform state file** at
+`./.bnk/terraform.tfstate` in your project directory (with the usual
+`.backup` sibling). Every resource across every phase lives in this
+single state file.
 
 To switch to a remote backend (IBM Cloud Object Storage, Terraform
-Cloud, S3, etc.) add a `backend` block to `versions.tf`. Nothing in the
-wrapper depends on local state.
+Cloud, S3, etc.) add a `backend` block to `versions.tf`. Nothing in
+the wrapper depends on local state.
 
 ---
 

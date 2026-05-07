@@ -417,15 +417,22 @@ resource "null_resource" "extract_flo_version" {
       helm_ok() {
         local v
         v=$(helm version --short 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || return 1
-        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -C
+        # busybox sort (Alpine) lacks -C; -c is portable across busybox + GNU.
+        # 2>/dev/null suppresses the "sort: line N: disorder:" diagnostic so
+        # only the exit code matters.
+        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -c 2>/dev/null
       }
       if ! helm_ok; then
         HELM_VERSION="3.17.2"
-        mkdir -p /tmp/helm-install
-        curl -fsSL -o /tmp/helm-install/helm.tar.gz \
+        # Per-resource scratch dir — terraform runs provisioners in
+        # parallel by default, so a shared /tmp/helm-install path
+        # races ("Text file busy" when one process writes while
+        # another extracts).
+        HELM_TMP=$(mktemp -d "$${TMPDIR:-/tmp}/helm-install-XXXXXX")
+        curl -fsSL -o "$HELM_TMP/helm.tar.gz" \
           "https://get.helm.sh/helm-v$HELM_VERSION-linux-amd64.tar.gz"
-        tar -xzf /tmp/helm-install/helm.tar.gz -C /tmp/helm-install
-        HELM_BIN="/tmp/helm-install/linux-amd64/helm"
+        tar -xzf "$HELM_TMP/helm.tar.gz" -C "$HELM_TMP"
+        HELM_BIN="$HELM_TMP/linux-amd64/helm"
       fi
       mkdir -p ${var.manifest_download_dir}
       cd ${var.manifest_download_dir}
@@ -756,15 +763,22 @@ resource "null_resource" "f5_lifecycle_operator" {
       helm_ok() {
         local v
         v=$(helm version --short 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || return 1
-        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -C
+        # busybox sort (Alpine) lacks -C; -c is portable across busybox + GNU.
+        # 2>/dev/null suppresses the "sort: line N: disorder:" diagnostic so
+        # only the exit code matters.
+        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -c 2>/dev/null
       }
       if ! helm_ok; then
         HELM_VERSION="3.17.2"
-        mkdir -p /tmp/helm-install
-        curl -fsSL -o /tmp/helm-install/helm.tar.gz \
+        # Per-resource scratch dir — terraform runs provisioners in
+        # parallel by default, so a shared /tmp/helm-install path
+        # races ("Text file busy" when one process writes while
+        # another extracts).
+        HELM_TMP=$(mktemp -d "$${TMPDIR:-/tmp}/helm-install-XXXXXX")
+        curl -fsSL -o "$HELM_TMP/helm.tar.gz" \
           "https://get.helm.sh/helm-v$HELM_VERSION-linux-amd64.tar.gz"
-        tar -xzf /tmp/helm-install/helm.tar.gz -C /tmp/helm-install
-        HELM_BIN="/tmp/helm-install/linux-amd64/helm"
+        tar -xzf "$HELM_TMP/helm.tar.gz" -C "$HELM_TMP"
+        HELM_BIN="$HELM_TMP/linux-amd64/helm"
       fi
       FLO_VERSION=$(cat ${var.manifest_download_dir}/flo-version.txt | tr -d '[:space:]')
       echo "${local.far_service_account_b64}" | $HELM_BIN registry login \
@@ -826,15 +840,22 @@ resource "null_resource" "f5_bnk_cis" {
       helm_ok() {
         local v
         v=$(helm version --short 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || return 1
-        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -C
+        # busybox sort (Alpine) lacks -C; -c is portable across busybox + GNU.
+        # 2>/dev/null suppresses the "sort: line N: disorder:" diagnostic so
+        # only the exit code matters.
+        printf '%s\n%s\n' "$HELM_MIN" "$v" | sort -V -c 2>/dev/null
       }
       if ! helm_ok; then
         HELM_VERSION="3.17.2"
-        mkdir -p /tmp/helm-install
-        curl -fsSL -o /tmp/helm-install/helm.tar.gz \
+        # Per-resource scratch dir — terraform runs provisioners in
+        # parallel by default, so a shared /tmp/helm-install path
+        # races ("Text file busy" when one process writes while
+        # another extracts).
+        HELM_TMP=$(mktemp -d "$${TMPDIR:-/tmp}/helm-install-XXXXXX")
+        curl -fsSL -o "$HELM_TMP/helm.tar.gz" \
           "https://get.helm.sh/helm-v$HELM_VERSION-linux-amd64.tar.gz"
-        tar -xzf /tmp/helm-install/helm.tar.gz -C /tmp/helm-install
-        HELM_BIN="/tmp/helm-install/linux-amd64/helm"
+        tar -xzf "$HELM_TMP/helm.tar.gz" -C "$HELM_TMP"
+        HELM_BIN="$HELM_TMP/linux-amd64/helm"
       fi
       CIS_VERSION=$(cat ${var.manifest_download_dir}/cis-version.txt | tr -d '[:space:]')
       echo "${local.far_service_account_b64}" | $HELM_BIN registry login \

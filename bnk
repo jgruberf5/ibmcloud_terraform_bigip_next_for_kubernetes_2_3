@@ -435,7 +435,12 @@ cmd_doctor() {
         set +e
         ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION" >/dev/null 2>&1
         echo "IBM_LOGIN=$?"
-        terraform -chdir=/opt/tf-project validate -no-color >/dev/null 2>&1
+        # Validate against the image-baked .terraform (pre-warmed by
+        # `terraform init` at build time) — not against TF_DATA_DIR
+        # which points at /work/.terraform and is empty on a fresh
+        # project dir.
+        TF_DATA_DIR=/opt/tf-project/.terraform \
+            terraform -chdir=/opt/tf-project validate -no-color >/dev/null 2>&1
         echo "TF_VALIDATE=$?"
     ' 2>/dev/null) || true
 

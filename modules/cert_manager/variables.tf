@@ -67,3 +67,15 @@ variable "roks_cluster_dependency_id" {
   default     = null
 }
 
+# Persistent dir for the kubeconfig that ibm_container_cluster_config downloads.
+# Default lives under /work/.bnk/scratch (host-bind-mounted in the bnk runner) so
+# the non-root container user can write it and the file survives across container
+# exits. path.module would resolve to /opt/tf-project/modules/cert_manager inside
+# the image — root-owned, read-only for the non-root container user, so MkdirAll
+# fails. Per-module subdir keeps concurrent data sources from clobbering each other.
+variable "kubeconfig_dir" {
+  description = "Persistent, writable dir for ibm_container_cluster_config kubeconfig downloads. Defaults to a host-bind-mounted, module-scoped path under .bnk/scratch."
+  type        = string
+  default     = "/work/.bnk/scratch/kubeconfig/cert_manager"
+}
+

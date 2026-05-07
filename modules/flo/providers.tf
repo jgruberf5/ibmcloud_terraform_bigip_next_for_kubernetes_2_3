@@ -10,7 +10,7 @@ provider "ibm" {
 data "ibm_container_cluster_config" "cluster_config" {
   count           = var.create_roks_cluster ? 0 : 1
   cluster_name_id = var.roks_cluster_name_or_id
-  config_dir      = path.module
+  config_dir      = var.kubeconfig_dir
 }
 
 provider "kubernetes" {
@@ -45,6 +45,6 @@ resource "null_resource" "cert_manager_gate" {
 
 data "ibm_container_cluster_config" "runtime_config" {
   cluster_name_id = var.roks_cluster_name_or_id
-  config_dir      = path.module
+  config_dir      = var.kubeconfig_dir
   depends_on      = [null_resource.roks_cluster_gate]
 }

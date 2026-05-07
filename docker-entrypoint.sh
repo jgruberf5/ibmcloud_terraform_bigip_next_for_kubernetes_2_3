@@ -67,6 +67,25 @@ export IBMCLOUD_REGION
 # share the same kubeconfig location.
 export KUBECONFIG="${KUBECONFIG:-$WORK_DIR/.bnk/.kube/config}"
 
+# Disable ibmcloud's interactive update prompt. On a TTY (bnk uses
+# `docker run -it`), `ibmcloud login` prints "New version X.Y.Z is
+# available... Do you want to update? [y/N]" and waits for input.
+# Answering 'y' invokes the install script which calls sudo (not
+# present in this image — and the runtime user is non-root anyway),
+# fails 127, and leaves the install half-applied.
+export IBMCLOUD_VERSION_CHECK="${IBMCLOUD_VERSION_CHECK:-false}"
+
+# Seed the user's .bluemix from the build-time template on first run.
+# Plugins (ks, vpc-infrastructure) and the --check-version=false
+# config are installed under /opt/ibmcloud-template/.bluemix in the
+# Dockerfile (world-readable). cp -rn means existing user state
+# (config.json with creds, target context, etc.) is preserved while
+# missing pieces — typically plugins/ — get added.
+if [[ -d /opt/ibmcloud-template/.bluemix ]]; then
+    mkdir -p "$WORK_DIR/.bnk/.bluemix"
+    cp -rn /opt/ibmcloud-template/.bluemix/. "$WORK_DIR/.bnk/.bluemix/" 2>/dev/null || true
+fi
+
 # Pre-create the per-module kubeconfig dirs. ibm_container_cluster_config
 # expects config_dir to exist (it does NOT MkdirAll) and emits "Path:
 # <dir>, to download the config doesn't exist" otherwise. Module names

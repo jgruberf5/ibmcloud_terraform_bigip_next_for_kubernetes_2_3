@@ -68,13 +68,22 @@ RUN curl -fsSL "https://download.clis.cloud.ibm.com/ibm-cloud-cli/${IBMCLOUD_CLI
     && ln -sf /lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
     && ibmcloud --version
 
-# IBM Cloud CLI plugins:
+# IBM Cloud CLI plugins, installed under a world-readable template
+# HOME so the non-root container user (--user $UID:$GID) can find
+# them at runtime. The default /root/.bluemix is 0700 root:root —
+# unreadable to the runtime user — so plugins installed there
+# disappear and `ibmcloud ks ...` fails with "'ks' is not a
+# registered command". docker-entrypoint.sh seeds /work/.bnk/.bluemix
+# from this template on first run.
+#
 #   container-service   for ROKS / IKS — also exposes `ibmcloud oc` for
 #                       OpenShift commands (the alias is kubernetes-service / ks)
 #   vpc-infrastructure  for VPC operations
-RUN ibmcloud config --check-version false \
-    && ibmcloud plugin install container-service -f \
-    && ibmcloud plugin install vpc-infrastructure -f
+RUN mkdir -p /opt/ibmcloud-template \
+    && HOME=/opt/ibmcloud-template ibmcloud config --check-version false \
+    && HOME=/opt/ibmcloud-template ibmcloud plugin install container-service -f \
+    && HOME=/opt/ibmcloud-template ibmcloud plugin install vpc-infrastructure -f \
+    && chmod -R a+rX /opt/ibmcloud-template
 
 # OpenShift `oc` CLI — pinned to the latest 4.18.x via the mirror's
 # stable-4.18 channel so commands stay compatible with the

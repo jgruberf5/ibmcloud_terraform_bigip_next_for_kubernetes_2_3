@@ -52,29 +52,56 @@ while [[ $# -gt 0 && "$1" == -* ]]; do
     esac
 done
 
+# ── Decide what setup is actually needed ────────────────────
+# The default cloud-exec path is "log in, fetch kubeconfig, then run
+# the command" — appropriate for kubectl/oc and the interactive
+# shell. For `ibmcloud help|--help|version|-v|config ...` we don't
+# need a login (the command is local) and definitely don't need a
+# kubeconfig. Skipping setup avoids tripping `ibmcloud login`'s
+# interactive update prompt and avoids failing the kubeconfig fetch
+# when the cluster doesn't yet exist (e.g. pre-apply for the
+# create_roks_cluster=true path).
+needs_login=true
+needs_kubeconfig=true
+if [[ "${1:-}" == "ibmcloud" ]]; then
+    # ibmcloud commands never need cloud-exec's kubeconfig prefetch —
+    # the user invoking ibmcloud directly is bootstrapping or doing
+    # IBM Cloud admin, not running cluster ops.
+    needs_kubeconfig=false
+    case "${2:-}" in
+        ""|--help|-h|help|--version|-v|version|config)
+            needs_login=false
+            ;;
+    esac
+fi
+
 # ── Credentials sanity check ────────────────────────────────
 # The entrypoint should have set these.  If they are still missing
 # the user mounted no tfvars and passed no env vars; fail loudly.
-[[ -n "${IBMCLOUD_API_KEY:-}" ]] || {
-    echo "cloud-exec: IBMCLOUD_API_KEY not set." >&2
-    echo "  Provide -e TF_VAR_ibmcloud_api_key=... or bind-mount terraform.tfvars at /work/." >&2
-    exit 1
-}
+if [[ "$needs_login" == "true" ]]; then
+    [[ -n "${IBMCLOUD_API_KEY:-}" ]] || {
+        echo "cloud-exec: IBMCLOUD_API_KEY not set." >&2
+        echo "  Provide -e TF_VAR_ibmcloud_api_key=... or bind-mount terraform.tfvars at /work/." >&2
+        exit 1
+    }
+fi
 : "${IBMCLOUD_REGION:=ca-tor}"
 export KUBECONFIG="${KUBECONFIG:-/work/.kube/config}"
 mkdir -p "$(dirname "$KUBECONFIG")"
 
 # ── Cluster discovery ───────────────────────────────────────
 CLUSTER="$CLUSTER_OVERRIDE"
-[[ -z "$CLUSTER" ]] && CLUSTER=$(tf_output_str roks_cluster_id)
-[[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar roks_cluster_id_or_name)
-[[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar openshift_cluster_name)
-[[ -n "$CLUSTER" ]] || {
-    echo "cloud-exec: cluster not found." >&2
-    echo "  Pass -c <name>, run after terraform apply, or set roks_cluster_id_or_name" >&2
-    echo "  / openshift_cluster_name in $TFVARS." >&2
-    exit 1
-}
+if [[ "$needs_kubeconfig" == "true" ]]; then
+    [[ -z "$CLUSTER" ]] && CLUSTER=$(tf_output_str roks_cluster_id)
+    [[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar roks_cluster_id_or_name)
+    [[ -z "$CLUSTER" ]] && CLUSTER=$(read_tfvar openshift_cluster_name)
+    [[ -n "$CLUSTER" ]] || {
+        echo "cloud-exec: cluster not found." >&2
+        echo "  Pass -c <name>, run after terraform apply, or set roks_cluster_id_or_name" >&2
+        echo "  / openshift_cluster_name in $TFVARS." >&2
+        exit 1
+    }
+fi
 
 # ── Login + kubeconfig (cached in volume) ───────────────────
 # IBM Cloud IAM bearer tokens last ~1h; refresh after 50 min so kubectl
@@ -86,10 +113,21 @@ TOKEN_TTL=3000
 MARKER="$KUBECONFIG.cluster-id"
 
 need_refresh=true
-if [[ -s "$KUBECONFIG" && -f "$MARKER" ]] \
+if [[ "$needs_kubeconfig" != "true" ]]; then
+    need_refresh=false
+elif [[ -s "$KUBECONFIG" && -f "$MARKER" ]] \
    && (( $(date +%s) - $(stat -c %Y "$KUBECONFIG") < TOKEN_TTL )) \
    && [[ "$(cat "$MARKER" 2>/dev/null)" == "$CLUSTER" ]]; then
     need_refresh=false
+fi
+
+if [[ "$needs_login" == "true" && "$needs_kubeconfig" != "true" ]]; then
+    # ibmcloud subcommand needs auth but no kubeconfig (e.g.
+    # `ibmcloud account list`, `ibmcloud target -g foo`). Login
+    # lazily so the IBM API call from the user's command has a
+    # session. Quiet redirect — the user's own command will produce
+    # their requested output.
+    ibmcloud login --apikey "$IBMCLOUD_API_KEY" -r "$IBMCLOUD_REGION" >/dev/null
 fi
 
 if [[ "$need_refresh" == true ]]; then

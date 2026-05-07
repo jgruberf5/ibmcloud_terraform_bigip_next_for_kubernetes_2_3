@@ -74,14 +74,14 @@ variable "f5_bigip_k8s_manifest_version" {
 
 variable "flo_trusted_profile_id" {
   description = "IBM IAM Trusted Profile ID for provisioning VPC routes"
-  type = string
-  default = ""
+  type        = string
+  default     = ""
 }
 
 variable "flo_cluster_issuer_name" {
   description = "mTLS certificate issuer name"
-  type = string
-  default = ""
+  type        = string
+  default     = ""
 }
 
 
@@ -103,8 +103,8 @@ variable "cneinstance_gslb_datacenter_name" {
 
 variable "cneinstance_network_attachments" {
   description = "The Multus Network Attachment Definitions for the CNEInstance TMM deployments"
-  type = list(string)
-  default = ["ens3-ipvlan-l2", "macvlan-conf"]
+  type        = list(string)
+  default     = ["ens3-ipvlan-l2", "macvlan-conf"]
 }
 
 variable "create_roks_cluster" {

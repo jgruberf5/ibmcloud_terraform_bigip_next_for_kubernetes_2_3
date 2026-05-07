@@ -1,9 +1,9 @@
 locals {
-  global_enabled = var.enabled
-  far_registry_hostname = replace(var.far_repo_url, "https://", "")
-  image_repository      = "${local.far_registry_hostname}/images"
+  global_enabled          = var.enabled
+  far_registry_hostname   = replace(var.far_repo_url, "https://", "")
+  image_repository        = "${local.far_registry_hostname}/images"
   far_service_account_b64 = local.global_enabled && var.use_cos_bucket ? data.local_file.cne_pull_64_json_file[0].content : ""
-  far_auth_value = base64encode("_json_key_base64:${local.far_service_account_b64}")
+  far_auth_value          = base64encode("_json_key_base64:${local.far_service_account_b64}")
   far_docker_config_json = replace(
     jsonencode({
       auths = {
@@ -81,8 +81,8 @@ locals {
       }
     }
 
-    namespace = var.flo_namespace
-    containerPlatform = "Generic"
+    namespace                = var.flo_namespace
+    containerPlatform        = "Generic"
     sharedComponentNamespace = var.utils_namespace
 
     image = {
@@ -129,7 +129,7 @@ data "ibm_resource_groups" "all_resource_groups" {
 
 data "ibm_resource_group" "resource_group" {
   count = local.global_enabled && var.use_cos_bucket ? 1 : 0
-  name  = var.ibmcloud_resource_group != "" ? var.ibmcloud_resource_group : [
+  name = var.ibmcloud_resource_group != "" ? var.ibmcloud_resource_group : [
     for rg in data.ibm_resource_groups.all_resource_groups[0].resource_groups :
     rg.name if rg.is_default == true
   ][0]

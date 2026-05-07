@@ -6,7 +6,7 @@
 
 locals {
   global_enabled = var.enabled
-  jwt_token = local.global_enabled && var.use_cos_bucket ? trimspace(data.http.jwt_download[0].response_body) : var.jwt_token
+  jwt_token      = local.global_enabled && var.use_cos_bucket ? trimspace(data.http.jwt_download[0].response_body) : var.jwt_token
 }
 
 # Wait for License CRD to be available (also gates on cneinstance completion)
@@ -28,7 +28,7 @@ data "ibm_resource_groups" "all_resource_groups" {
 
 data "ibm_resource_group" "resource_group" {
   count = local.global_enabled && var.use_cos_bucket ? 1 : 0
-  name  = var.ibmcloud_resource_group != "" ? var.ibmcloud_resource_group : [
+  name = var.ibmcloud_resource_group != "" ? var.ibmcloud_resource_group : [
     for rg in data.ibm_resource_groups.all_resource_groups[0].resource_groups :
     rg.name if rg.is_default == true
   ][0]

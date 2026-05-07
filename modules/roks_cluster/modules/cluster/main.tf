@@ -344,12 +344,12 @@ locals {
 
 # Create Transit Gateway with global routing
 resource "ibm_tg_gateway" "transit_gateway" {
-  count                          = var.create_transit_gateway ? 1 : 0
-  name                           = var.transit_gateway_name
-  location                       = var.cluster_region
-  global                         = true
-  resource_group                 = data.ibm_resource_group.resource_group.id
-  tags                           = ["terraform", "transit-gateway"]
+  count          = var.create_transit_gateway ? 1 : 0
+  name           = var.transit_gateway_name
+  location       = var.cluster_region
+  global         = true
+  resource_group = data.ibm_resource_group.resource_group.id
+  tags           = ["terraform", "transit-gateway"]
 
   timeouts {
     create = "30m"

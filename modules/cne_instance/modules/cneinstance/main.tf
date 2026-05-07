@@ -1,81 +1,81 @@
 locals {
   cneinstance_name = "${var.flo_namespace}-f5-cne-controller"
-  
+
   # Define all service accounts that require privileged SCC
   # These service accounts are created by CNEInstance and FLO deployment
   scc_policy_assignments = concat(
     # f5-bnk namespace service accounts (if this is the main FLO namespace)
     var.flo_namespace == "f5-bnk" ? [
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "f5-cne-env-discovery-serviceaccount"
       },
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "tmm-sa"
       },
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "f5-dssm"
       },
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "f5-downloader"
       },
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "f5-cne-controller-${var.flo_namespace}-f5-cne-controller-serviceaccount"
       },
       {
-        namespace = var.flo_namespace
+        namespace       = var.flo_namespace
         service_account = "f5-afm"
       }
     ] : [],
     # f5-utils namespace service accounts
     [
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "crd-installer"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "cwc"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-coremond"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-crdconversion"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-observer-operator"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-rabbitmq"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-toda-fluentd-serviceaccount"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "otel-sa"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "default"
       },
       {
-        namespace = var.utils_namespace
+        namespace       = var.utils_namespace
         service_account = "f5-ipam-ctlr"
       }
     ]
   )
-  
+
   cneinstance_spec = {
     product = {
       gatewayAPI = var.cneinstance_gateway_api
@@ -208,9 +208,9 @@ locals {
 
 # Wait for CNEInstance CRD to be available
 resource "time_sleep" "wait_for_cneinstance_crd" {
-  count            = var.enabled ? 1 : 0
-  depends_on       = [var.flo_deployment_dependency]
-  create_duration  = "30s"
+  count           = var.enabled ? 1 : 0
+  depends_on      = [var.flo_deployment_dependency]
+  create_duration = "30s"
 
   triggers = {
     flo_deployed = var.flo_deployment_id
@@ -316,9 +316,9 @@ resource "null_resource" "cneinstance_scc_policies" {
 # ============================================================
 
 resource "time_sleep" "wait_for_scc_policies" {
-  count            = var.enabled ? 1 : 0
-  depends_on       = [null_resource.cneinstance_scc_policies]
-  create_duration  = "30s"
+  count           = var.enabled ? 1 : 0
+  depends_on      = [null_resource.cneinstance_scc_policies]
+  create_duration = "30s"
 
   triggers = {
     scc_policies_count = length(null_resource.cneinstance_scc_policies)

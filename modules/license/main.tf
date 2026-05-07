@@ -41,7 +41,7 @@ module "license" {
   enabled = var.deploy_bnk
 
   use_cos_bucket = true
-  jwt_token = ""
+  jwt_token      = ""
 
   ibmcloud_api_key              = var.ibmcloud_api_key
   ibmcloud_cos_bucket_region    = var.ibmcloud_cos_bucket_region
@@ -49,9 +49,9 @@ module "license" {
   ibmcloud_cos_instance_name    = var.ibmcloud_cos_instance_name
   ibmcloud_resources_cos_bucket = var.ibmcloud_resources_cos_bucket
 
-  utils_namespace = var.flo_utils_namespace
-  f5_cne_subscription_jwt_file  = var.f5_cne_subscription_jwt_file
-  license_mode    = var.license_mode
+  utils_namespace              = var.flo_utils_namespace
+  f5_cne_subscription_jwt_file = var.f5_cne_subscription_jwt_file
+  license_mode                 = var.license_mode
 
   kube_host              = data.ibm_container_cluster_config.runtime_config.host
   kube_token             = data.ibm_container_cluster_config.runtime_config.token

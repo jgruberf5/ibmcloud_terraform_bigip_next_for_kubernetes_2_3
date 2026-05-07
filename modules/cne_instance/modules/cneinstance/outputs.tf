@@ -56,12 +56,12 @@ output "utils_namespace_pods_count" {
 output "pod_deployment_status" {
   description = "Pod deployment status after readiness wait"
   value = var.enabled ? {
-    flo_namespace_pod_count    = 0
-    utils_namespace_pod_count  = 0
-    flo_pods_not_ready         = []
-    utils_pods_not_ready       = []
-    scc_policies_applied       = length(null_resource.cneinstance_scc_policies)
-    all_pods_running           = true
+    flo_namespace_pod_count   = 0
+    utils_namespace_pod_count = 0
+    flo_pods_not_ready        = []
+    utils_pods_not_ready      = []
+    scc_policies_applied      = length(null_resource.cneinstance_scc_policies)
+    all_pods_running          = true
   } : null
 }
 

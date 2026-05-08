@@ -65,6 +65,7 @@ module "cert_manager" {
   cert_manager_version       = var.cert_manager_version
   create_roks_cluster        = var.create_roks_cluster
   roks_cluster_dependency_id = module.roks_cluster.cluster_ready_id
+  kubeconfig_dir             = "${var.kubeconfig_dir}/cert_manager"
 }
 
 
@@ -97,6 +98,7 @@ module "flo" {
   roks_cluster_dependency_id    = module.roks_cluster.cluster_ready_id
   cert_manager_dependency_id    = module.cert_manager.cert_manager_ready_id
   deploy_bnk                    = var.deploy_bnk
+  kubeconfig_dir                = "${var.kubeconfig_dir}/flo"
 }
 
 locals {
@@ -139,6 +141,7 @@ module "cne_instance" {
   roks_cluster_dependency_id       = module.roks_cluster.cluster_ready_id
   flo_dependency_id                = module.flo.flo_ready_id
   deploy_bnk                       = var.deploy_bnk
+  kubeconfig_dir                   = "${var.kubeconfig_dir}/cne_instance"
 }
 
 
@@ -164,6 +167,7 @@ module "license" {
   roks_cluster_dependency_id    = module.roks_cluster.cluster_ready_id
   cneinstance_dependency_id     = module.cne_instance.cneinstance_ready_id
   deploy_bnk                    = var.deploy_bnk
+  kubeconfig_dir                = "${var.kubeconfig_dir}/license"
 }
 
 

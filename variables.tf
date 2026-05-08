@@ -361,3 +361,26 @@ variable "testing_cluster_jumphost_name_prefix" {
   type        = string
   default     = "tf-testing-jumphost-cluster"
 }
+
+# ============================================================
+# Kubeconfig scratch directory
+# ============================================================
+
+# Threaded through to each of the four submodules
+# (cert_manager / cne_instance / flo / license) where the IBM provider's
+# ibm_container_cluster_config data source writes its admin kubeconfig.
+# Each module appends its own name as a subdir, so the four downloads
+# don't collide.
+#
+# Default targets the bnk runner image's bind-mount layout (/work is
+# the host cwd inside the container). Consumers running terraform
+# directly on a host (e.g., bnkctl) should override this to a writable
+# path, e.g., ~/.bnkctl/<workspace>/state/kubeconfig.
+#
+# The path must already exist (the IBM provider does NOT MkdirAll) and
+# be writable by the user running terraform.
+variable "kubeconfig_dir" {
+  description = "Parent directory where ibm_container_cluster_config writes admin kubeconfigs. Each submodule appends its name as a subdir. Default is the bnk runner image's /work mount; override for direct-on-host runs."
+  type        = string
+  default     = "/work/.bnk/scratch/kubeconfig"
+}

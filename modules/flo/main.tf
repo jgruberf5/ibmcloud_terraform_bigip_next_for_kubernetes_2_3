@@ -71,6 +71,11 @@ module "flo" {
   bigip_password = var.bigip_password
   bigip_url      = var.bigip_url
 
+  # Scratch dirs — single root-level scratch_dir collapses to both
+  # inner-module knobs by convention.
+  scratch_dir           = var.scratch_dir
+  manifest_download_dir = "${var.scratch_dir}/f5-manifest"
+
   openshift_cluster_name = data.ibm_container_vpc_cluster.cluster.name
   openshift_cluster_crn  = data.ibm_container_vpc_cluster.cluster.crn
   cluster_vpc_id         = data.ibm_is_vpc.cluster_vpc.id

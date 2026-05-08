@@ -99,6 +99,7 @@ module "flo" {
   cert_manager_dependency_id    = module.cert_manager.cert_manager_ready_id
   deploy_bnk                    = var.deploy_bnk
   kubeconfig_dir                = "${var.kubeconfig_dir}/flo"
+  scratch_dir                   = var.scratch_dir
 }
 
 locals {

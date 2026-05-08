@@ -177,3 +177,18 @@ variable "kubeconfig_dir" {
   type        = string
   default     = "/work/.bnk/scratch/kubeconfig/flo"
 }
+
+# Persistent scratch directory for cross-apply artifacts (FAR auth tarball,
+# extracted JSON read by data.local_file on later applies, f5-manifest helm
+# extraction). Inner flo module declares scratch_dir + manifest_download_dir
+# separately; this outer module collapses them into one knob and derives
+# manifest_download_dir as ${scratch_dir}/f5-manifest.
+#
+# Default targets the bnk runner image's bind-mount layout (/work is the
+# host cwd inside the container). Consumers running terraform directly on
+# a host (e.g., bnkctl) override this to a writable path.
+variable "scratch_dir" {
+  description = "Persistent scratch directory for FAR/manifest cross-apply artifacts. Default is the bnk runner image's /work mount."
+  type        = string
+  default     = "/work/.bnk/scratch"
+}

@@ -384,3 +384,22 @@ variable "kubeconfig_dir" {
   type        = string
   default     = "/work/.bnk/scratch/kubeconfig"
 }
+
+# ============================================================
+# Scratch directory for FAR / manifest cross-apply artifacts
+# ============================================================
+
+# Threaded into the flo module which uses it for:
+#   - FAR auth tarball download + extraction
+#   - f5-bigip-k8s-manifest helm chart extraction
+#
+# The flo module derives manifest_download_dir as ${scratch_dir}/f5-manifest
+# automatically; users only need to override this single root variable.
+#
+# Default targets the bnk runner image's /work bind-mount; override for
+# direct-on-host runs (e.g., bnkctl).
+variable "scratch_dir" {
+  description = "Persistent scratch directory for FLO's FAR/manifest cross-apply artifacts. Default is the bnk runner image's /work mount; override for direct-on-host runs."
+  type        = string
+  default     = "/work/.bnk/scratch"
+}

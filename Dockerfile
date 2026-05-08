@@ -21,7 +21,7 @@ FROM alpine:3.19
 ARG TERRAFORM_VERSION=1.9.8
 ARG ALPINE_VERSION=3.19
 ARG OC_VERSION=stable-4.18
-ARG IBMCLOUD_CLI_VERSION=2.27.0
+ARG IBMCLOUD_CLI_VERSION=2.43.0
 
 # kubectl and helm live in the alpine community repository.
 # gcompat provides the glibc shim ibmcloud and oc need on musl.
